@@ -26,7 +26,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   5-Round Quiz (unchanged)
+   5-Round Quiz
 ======================== */
 (function(){
   const startForm = document.querySelector('#quiz-start');
@@ -159,7 +159,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Find the Character (unchanged behavior)
+   Find the Character
 ======================== */
 (function(){
   const startForm = $('#start-form');
@@ -232,7 +232,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Healthy Diet (unchanged API, supports 10 Q)
+   Healthy Diet
 ======================== */
 (function(){
   const card = document.getElementById('hd-card');
@@ -314,9 +314,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Budget Glam Builder — 3-step flow
-   1) Play -> 2) Review -> 3) Generate Results
-   + Over-budget block, timer, paging
+   Budget Glam Builder — Auto-finish + allow finish with <12 picks
 ======================== */
 (function(){
   const form = document.querySelector('#glam-start');
@@ -338,7 +336,7 @@ function html(e,m){if(e)e.innerHTML=m}
   const actionsRow = document.querySelector('#glam-actions');
   const finishBtn  = document.querySelector('#glam-finish');
 
-  // New: Review + Results sections
+  // Review + Results sections
   const reviewSec   = document.querySelector('#glam-review');
   const reviewMeta  = document.querySelector('#glam-review-meta');
   const reviewList  = document.querySelector('#glam-review-list');
@@ -378,7 +376,12 @@ function html(e,m){if(e)e.innerHTML=m}
       timeLeft -= 1;
       if (timeLeft < 0) timeLeft = 0;
       timerEl.textContent = `Time: ${timeLeft}s`;
-      if(timeLeft <= 0){ clearTimer(); goToReview(); }
+      if(timeLeft <= 0){
+        clearTimer();
+        // ⏲️ Auto-finish with current selections.
+        // If <12 picks, server will mark failed; client still shows score/tips.
+        generateResults(true);
+      }
     }, 1000);
   }
 
@@ -445,19 +448,18 @@ function html(e,m){if(e)e.innerHTML=m}
     updateHUD();
   }
 
-  // Step 2: Review (no server call yet)
+  // Step 2: Review (if >=12 picks). If <12, go straight to results (fail).
   function goToReview(){
+    clearTimer();
     if(selected.size < 12){
-      showToast('Please pick at least 12 products before finishing.');
+      // Allow finishing early, but it's an immediate fail with results.
+      generateResults(false);
       return;
     }
-    finishing = true;
-    clearTimer();
 
-    // Hide gameplay UI
+    finishing = true;
     hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
 
-    // Build review list
     reviewList.innerHTML = '';
     const spend = currentSpend();
     reviewMeta.textContent = `You selected ${selected.size} items, Spend: ₹${spend} / Budget: ₹${budgetInr} | Time: ${180 - Math.max(0,timeLeft)}s`;
@@ -475,7 +477,12 @@ function html(e,m){if(e)e.innerHTML=m}
   }
 
   // Step 3: Generate Results (server scoring)
-  async function generateResults(){
+  async function generateResults(autoTimed = false){
+    if(finishing && !autoTimed) return; // prevent accidental double calls
+    finishing = true;
+
+    // Hide gameplay & review; go to results page
+    hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow); hide(reviewSec);
     outEl.textContent = 'Scoring your kit...';
     detailList.innerHTML = '';
     show(resultsSec);
@@ -500,7 +507,7 @@ function html(e,m){if(e)e.innerHTML=m}
       const pos = Array.isArray(json.positives) ? json.positives.slice(0,6) : [];
       const neg = Array.isArray(json.negatives) ? json.negatives.slice(0,6) : [];
       const lines = [];
-      lines.push(json.win ? '🎉 Great build!' : '❌ Try again.');
+      lines.push(json.win ? '🎉 Great build!' : '❌ Run failed.');
       lines.push(`Score: ${json.score}/100`);
       if(json.summary) lines.push(json.summary);
       lines.push(`Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`);
@@ -509,11 +516,11 @@ function html(e,m){if(e)e.innerHTML=m}
         pos.forEach((p,i)=>lines.push(`  ${i+1}. ${p}`));
       }
       if(neg.length){
-        lines.push('\n⚠️ Areas to improve:');
+        lines.push('\n⚠️ Points to improve:');
         neg.forEach((n,i)=>lines.push(`  ${i+1}. ${n}`));
       }
 
-      // Contextual skin protection tip
+      // Skin protection tip
       const selItems = Array.from(selected).map(i=>items[i]);
       const hasSPF = selItems.some(p => {
         const text = `${p.name} ${p.category} ${(p.tags||[]).join(' ')}`.toLowerCase();
@@ -522,30 +529,24 @@ function html(e,m){if(e)e.innerHTML=m}
       const tip = hasSPF
         ? "🧴 Tip: Reapply sunscreen every 2–3 hours, even indoors near windows."
         : "🧴 Tip: Add a broad-spectrum SPF 30+ sunscreen for daily protection.";
-
       lines.push('\n' + tip);
+
       outEl.textContent = lines.join('\n');
 
       // Two-sentence blurb per product
       detailList.innerHTML = '';
-      selItems.forEach((p, i) => {
+      selItems.forEach((p) => {
         const div = document.createElement('div');
         div.className = 'option';
         const tags = [...(p.tags||[]), p.category].filter(Boolean).slice(0,4);
         const tagTxt = tags.length ? ` [${tags.join(' · ')}]` : '';
-        // Sentence 1: structured info
         const s1 = `${p.name}${tagTxt} — ₹${p.price}.`;
-        // Sentence 2: from description/tags
         const s2 = (p.description && p.description.trim().length)
           ? `${p.description.trim().replace(/\.*$/, '')}.`
           : `Useful addition to round out your routine.`;
         div.textContent = `${s1} ${s2}`;
         detailList.appendChild(div);
       });
-
-      // Move focus to results
-      reviewSec.classList.add('hidden');
-      resultsSec.classList.remove('hidden');
     }catch{
       outEl.textContent = 'Network error.';
     }
@@ -553,8 +554,18 @@ function html(e,m){if(e)e.innerHTML=m}
 
   prevBtn.addEventListener('click', ()=>{ if(page>0 && !finishing){ page--; renderPage(); } });
   nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length && !finishing){ page++; renderPage(); } });
-  finishBtn.addEventListener('click', (e)=>{ e.preventDefault(); goToReview(); });
-  generateBtn.addEventListener('click', (e)=>{ e.preventDefault(); generateResults(); });
+
+  // Allow finishing before 12 picks — will be marked failed by server
+  finishBtn.addEventListener('click', (e)=>{
+    e.preventDefault();
+    if(selected.size < 12){
+      generateResults(false); // submit immediately (failed)
+    } else {
+      goToReview();           // go to review first if valid
+    }
+  });
+
+  generateBtn.addEventListener('click', (e)=>{ e.preventDefault(); generateResults(false); });
 
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
@@ -568,7 +579,6 @@ function html(e,m){if(e)e.innerHTML=m}
     const gender = form.gender.value;
     const budget = Number(form.budget.value);
 
-    // Hide start form once game begins
     form.style.display = 'none';
 
     try{
@@ -590,7 +600,6 @@ function html(e,m){if(e)e.innerHTML=m}
       selected.clear();
       page = 0;
 
-      // Show gameplay UI
       hud.classList.remove('hidden');
       listEl.classList.remove('hidden');
       pagerRow.classList.remove('hidden');
