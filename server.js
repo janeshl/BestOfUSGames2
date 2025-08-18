@@ -19,9 +19,115 @@ app.use("/api/", rateLimit({ windowMs: 60 * 1000, max: 30 }));
 
 // In-memory store (simple demo)
 const sessions = new Map();
-const recentByTopic = new Map();        // Character game: avoid repeats
-const recentQuizByTopic = new Map();    // Quiz game: store ONLY last round (5 qns) per topic
+const recentByTopic = new Map();        // Character game: avoid repeats (names)
+const recentQuizByTopic = new Map();    // Quiz game: store ONLY last 5 question strings per topic
 const makeId = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10);
+
+/* ------------------------
+   Helpers
+------------------------- */
+function prng(seed) {
+  // tiny deterministic PRNG for fallback quiz generation
+  let s = 0;
+  String(seed || "x").split("").forEach((c, i) => (s ^= (c.charCodeAt(0) + i) & 0xffff));
+  return () => {
+    s ^= s << 13; s ^= s >>> 17; s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  };
+}
+
+function shuffle(arr, rng) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor((rng ? rng() : Math.random()) * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function fallbackQuiz(topic, seed) {
+  const rng = prng(seed);
+  const banks = [
+    {
+      stem: `Which statement about ${topic} is MOST accurate?`,
+      opts: [
+        `A nuanced fact about ${topic} that is correct.`,
+        `A plausible but false claim about ${topic}.`,
+        `An outdated statement about ${topic}.`,
+        `A generic statement that doesn't apply to ${topic}.`,
+      ],
+      ans: 1,
+    },
+    {
+      stem: `In ${topic}, which option BEST reflects a hard concept?`,
+      opts: [
+        `The correct deep concept in ${topic}.`,
+        `A shallow heuristic.`,
+        `An unrelated principle.`,
+        `A misinterpretation.`,
+      ],
+      ans: 1,
+    },
+    {
+      stem: `Pick the TRUE detail regarding ${topic}.`,
+      opts: [
+        `The true advanced detail for ${topic}.`,
+        `A tempting misconception.`,
+        `A partial truth lacking key context.`,
+        `A generalization that fails in ${topic}.`,
+      ],
+      ans: 1,
+    },
+    {
+      stem: `${topic}: which scenario would MOST likely occur?`,
+      opts: [
+        `The realistic scenario based on ${topic} rules.`,
+        `An edge case misapplied to ${topic}.`,
+        `A contradictory scenario.`,
+        `An impossible case.`,
+      ],
+      ans: 1,
+    },
+    {
+      stem: `Choose the BEST practice for ${topic}.`,
+      opts: [
+        `The best hard-level practice in ${topic}.`,
+        `A common anti-pattern.`,
+        `An irrelevant best practice from elsewhere.`,
+        `A risky shortcut.`,
+      ],
+      ans: 1,
+    },
+    {
+      stem: `Which term is used precisely in ${topic}?`,
+      opts: [
+        `The precise term in ${topic}.`,
+        `A near-synonym used incorrectly.`,
+        `A different domain's term.`,
+        `A casual nickname.`,
+      ],
+      ans: 1,
+    },
+  ];
+
+  const picked = shuffle(banks, rng).slice(0, 5).map((b, i) => {
+    // Randomly shuffle options & keep answer index aligned
+    const idxs = [0,1,2,3];
+    const shuffledIdxs = shuffle(idxs, rng);
+    const options = shuffledIdxs.map(k => b.opts[k]);
+    const answerIndex = shuffledIdxs.indexOf(b.ans - 1) + 1;
+    // Add slight phrasing variety with seed sprinkle
+    const spice = ["(hard)", "(advanced)", "(expert)", "(tricky)", "(depth)"][Math.floor(rng()*5)];
+    return {
+      question: `${b.stem} ${spice}`,
+      options,
+      answerIndex,
+      explanation: `The first correct option captures the precise/most accurate choice for ${topic}.`,
+    };
+  });
+
+  return picked;
+}
 
 /* ------------------------
    Prompt templates
@@ -43,12 +149,27 @@ Favorite place: ${favoritePlace}`,
     },
   ],
 
-  // Game 2: 5-Round Quiz (hard questions)
-  quiz: (topic) => [
+  // Game 2: 5-Round Quiz (hard questions) — now with hidden seed for variety
+  quiz: (topic, seed) => [
     {
       role: "system",
       content:
-        "Create a 5 Hard level questions multiple-choice quiz for the given topic. For EACH question, provide exactly 4 options and indicate the correct option index. Return STRICT JSON with shape: { questions: [ { question: string, options: string[4], answerIndex: 1|2|3|4, explanation: string } x5 ] }. Keep questions clear, fair, and varied difficulty. Do NOT include any extra text.",
+        `Create a 5 Hard-level question multiple-choice quiz for the given topic.
+Use this hidden random seed to ensure different questions each time: "${seed}".
+
+For EACH question:
+- Provide exactly 4 options.
+- Indicate the correct option index (1–4).
+- Hard but fair.
+- NO repetition across runs given the seed.
+
+Return STRICT JSON with shape:
+{
+  "questions": [
+    { "question": string, "options": string[4], "answerIndex": 1|2|3|4, "explanation": string } x5
+  ]
+}
+No extra text.`,
     },
     { role: "user", content: `Topic: ${topic}. Return JSON only.` },
   ],
@@ -269,11 +390,12 @@ app.post("/api/predict-future", async (req, res) => {
 });
 
 /* ========================
-   Game 2: 5-Round Quiz (exclude only last round per topic)
+   Game 2: 5-Round Quiz (exclude only last round per topic; seeded variety + fallback)
 ======================== */
 app.post("/api/quiz/start", async (req, res) => {
   try {
     const { topic = "General" } = req.body ?? {};
+    const seed = makeId(); // hidden seed ensures variety each play
 
     const fixQuestion = (q, i) => {
       const question = String(q?.question || `Question ${i + 1} about ${topic}?`).trim();
@@ -293,41 +415,44 @@ app.post("/api/quiz/start", async (req, res) => {
       return { question, options, answerIndex, explanation };
     };
 
-    // Call model
+    // 1) Ask model with a seed to force different questions
     let modelQs = [];
     try {
-      const raw = await chatCompletion(PROMPTS.quiz(topic), 0.5, 900);
+      const raw = await chatCompletion(PROMPTS.quiz(topic, seed), 0.5, 900);
       const parsed = JSON.parse(raw);
       modelQs = Array.isArray(parsed?.questions) ? parsed.questions : [];
     } catch (e) {
       console.warn("Quiz: model/unparseable JSON, falling back:", e?.message);
     }
 
-    // Fallback if needed
+    // 2) If model fails, generate local hard-ish questions
     if (!modelQs.length) {
-      modelQs = [
-        { question: `Which of these relates most to ${topic}?`, options: ["A", "B", "C", "D"], answerIndex: 1, explanation: "Topic warm-up." },
-        { question: `A harder ${topic} question #2?`, options: ["Opt 1", "Opt 2", "Opt 3", "Opt 4"], answerIndex: 2, explanation: "Reasoning." },
-        { question: `Tricky concept in ${topic}?`, options: ["X", "Y", "Z", "W"], answerIndex: 3, explanation: "Concept check." },
-        { question: `${topic}: pick the correct statement.`, options: ["Stmt 1", "Stmt 2", "Stmt 3", "Stmt 4"], answerIndex: 4, explanation: "Facts." },
-        { question: `${topic}: which option best fits?`, options: ["One", "Two", "Three", "Four"], answerIndex: 1, explanation: "Fit." },
-      ];
+      modelQs = fallbackQuiz(topic, seed);
     }
 
     const cleaned = modelQs.map(fixQuestion);
 
-    // Exclude ONLY the last round's questions (up to 5)
+    // 3) Exclude ONLY the last round's questions (up to 5)
     const lastRound = (recentQuizByTopic.get(topic) || []).slice(-5);
     const excludeSet = new Set(lastRound.map((q) => q.toLowerCase()));
     let fresh = cleaned.filter((q) => q?.question && !excludeSet.has(q.question.toLowerCase()));
 
-    // If everything filtered, soften exclusion (allow reuse except the first 2 of last round)
+    // 4) If everything filtered, soften exclusion (allow reuse except first 2 of last round)
     if (fresh.length < 5) {
       const softerExclude = new Set(lastRound.slice(0, 2).map((q) => q.toLowerCase()));
       fresh = cleaned.filter((q) => q?.question && !softerExclude.has(q.question.toLowerCase()));
     }
 
-    // Ensure 5
+    // 5) If still short, top up with local fallback that is guaranteed unique to the seed
+    if (fresh.length < 5) {
+      const need = 5 - fresh.length;
+      const topup = fallbackQuiz(`${topic}`, `${seed}-extra`).filter(
+        x => !excludeSet.has(x.question.toLowerCase())
+      ).slice(0, need);
+      fresh = [...fresh, ...topup];
+    }
+
+    // 6) Ensure 5
     const questions = fresh.slice(0, 5);
     while (questions.length < 5) {
       const i = questions.length + 1;
@@ -378,15 +503,19 @@ app.post("/api/quiz/answer", (req, res) => {
     s.idx += 1;
     const done = s.idx >= 5;
     if (done) {
-      sessions.delete(token);
-      return res.json({
+      const payload = {
         ok: true,
         done: true,
         correct,
         explanation,
         score: s.score,
         total: 5,
-      });
+        message: s.score >= 4
+          ? `🎉 Winner! You scored ${s.score}/5`
+          : `❌ Try again. You scored ${s.score}/5`,
+      };
+      sessions.delete(token);
+      return res.json(payload);
     }
     const next = s.questions[s.idx];
     res.json({
@@ -406,7 +535,7 @@ app.post("/api/quiz/answer", (req, res) => {
   }
 });
 
-// Optional quick connectivity check
+// Quick connectivity check (optional)
 app.get("/api/quiz/ping", (_req, res) => {
   res.json({
     ok: true,
@@ -524,7 +653,7 @@ app.post("/api/character/turn", async (req, res) => {
 });
 
 /* ========================
-   Game 4: Find the Healthy-Diet (10 questions)
+   Game 4: Find the Healthy-Diet (10 questions, 5+5 in UI)
 ======================== */
 app.post("/api/healthy/start", async (_req, res) => {
   try {
