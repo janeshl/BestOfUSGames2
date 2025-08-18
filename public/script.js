@@ -597,4 +597,3 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   });
 })();
 
-})();
