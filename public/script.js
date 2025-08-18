@@ -18,8 +18,8 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   });
 })();
 
-// 5-Round Quiz
 // 5-Round Quiz with 20s per-question timer (auto-mark wrong on timeout)
+// (Now avoids repeating previous questions server-side per topic)
 (function(){
   const startForm = document.querySelector('#quiz-start');
   if(!startForm) return;
@@ -56,7 +56,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
 
   async function submitAnswer(choiceIndex, clickedEl){
     if(lock) return; lock = true;
-    // stop inputs
     Array.from(optsEl.children).forEach(n => n.style.pointerEvents='none');
     clearTimer();
 
@@ -72,11 +71,9 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
         lock = false; return;
       }
 
-      // show correctness styling if we had a clicked option
       if(clickedEl){
         clickedEl.style.borderColor = json.correct ? 'rgba(51,200,120,.8)' : 'rgba(255,80,80,.8)';
       } else {
-        // timeout path: lightly indicate timeout
         nextEl.innerHTML = '<div class="pill">⏳ Time up — counted as wrong.</div>';
       }
 
@@ -89,10 +86,9 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
 
       if(json.done){
         nextEl.innerHTML = '<div class="pill">🏁 Finished! Score: '+json.score+' / '+json.total+'</div>';
-        return; // end
+        return;
       }
 
-      // prepare Next button (immediate move or click-to-advance)
       nextEl.innerHTML = '';
       const b = document.createElement('button');
       b.className = 'btn'; b.textContent = 'Next';
@@ -119,20 +115,17 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
     nextEl.innerHTML = '';
     lock = false;
 
-    // Build options
     (options || []).forEach((opt, i) => {
       const d = document.createElement('div');
       d.className = 'option';
       d.textContent = (i+1) + '. ' + opt;
-      d.onclick = () => submitAnswer(i+1, d);  // user click path
+      d.onclick = () => submitAnswer(i+1, d);
       optsEl.appendChild(d);
     });
 
-    // Start the 20s timer; on expire, submit choice 0 (always wrong)
-    startTimer(() => submitAnswer(0, null));
+    startTimer(() => submitAnswer(0, null)); // timeout path
   }
 
-  // Start quiz
   startForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const topic = e.target.topic.value;
@@ -154,7 +147,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   });
 })();
 
-// Find the Character (conversational)
+// Find the Character (conversational) — hard level & multiple hints after 7th
 (function(){
   const startForm = $('#start-form');
   const turnForm = $('#turn-form');
@@ -174,7 +167,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
 
   startForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    html(chat, '<div class="pill">Picking a secret character...</div>');
+    html(chat, '<div class="pill">Picking a secret HARD character...</div>');
     const topic = e.target.topic.value;
     e.target.topic.value='';
     try{
@@ -202,12 +195,24 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
         const res = await fetch('/api/character/turn', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, text: line }) });
         const json = await res.json();
         if(!json.ok){ pushMsg('AI', 'Error: ' + (json.error || 'Unknown error')); return; }
+
         if(json.answer){ pushMsg('AI', json.answer); if(answerBox){ answerBox.textContent = json.answer; } }
-        if(json.hint){ pushMsg('AI', '💡 Hint: ' + json.hint); }
+
+        // Show multiple hints (after round 7)
+        if(Array.isArray(json.hints) && json.hints.length){
+          json.hints.forEach((h)=> pushMsg('AI', '💡 Hint: ' + h));
+        }
+
         if(json.done){
-          if(json.win){ html(result, '<div class="pill">🎉 Correct! You found ' + json.name + '.</div>'); }
-          else { html(result, '<div class="pill">🕵️ Out of rounds. The character was ' + json.name + '.</div>'); }
-          sessionId = null; if(json.message) pushMsg('AI', json.message); return;
+          if(json.win){
+            html(result, '<div class="pill">🎉 Correct! You found the character.</div>');
+            pushMsg('AI', json.message || '🎉 Congrats!');
+          } else {
+            html(result, '<div class="pill">🕵️ Out of rounds.</div>');
+            if(json.message) pushMsg('AI', json.message);
+          }
+          sessionId = null;
+          return;
         }
         if(typeof json.roundsLeft === 'number'){ roundsLeft = json.roundsLeft; setText(rounds, 'Rounds left: ' + roundsLeft); }
       }catch{ pushMsg('AI', 'Network error. Please try again.'); }
@@ -230,7 +235,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   let questions = [];
   const answers = new Array(8).fill("");
 
-  // helpers
   const show = (el) => el && el.classList.remove('hidden');
   const hide = (el) => el && el.classList.add('hidden');
 
@@ -241,17 +245,14 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       if(!json.ok){ loading.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
       token = json.token;
       questions = json.questions || [];
-      // Fill round 1 labels
       document.getElementById('hd-q1').textContent = questions[0] || 'Question 1';
       document.getElementById('hd-q2').textContent = questions[1] || 'Question 2';
       document.getElementById('hd-q3').textContent = questions[2] || 'Question 3';
       document.getElementById('hd-q4').textContent = questions[3] || 'Question 4';
-      // Fill round 2 labels
       document.getElementById('hd-q5').textContent = questions[4] || 'Question 5';
       document.getElementById('hd-q6').textContent = questions[5] || 'Question 6';
       document.getElementById('hd-q7').textContent = questions[6] || 'Question 7';
       document.getElementById('hd-q8').textContent = questions[7] || 'Question 8';
-      // Show first round
       hide(loading); show(r1);
     }catch{
       loading.textContent = 'Network error. Please try again.';
@@ -296,7 +297,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   start();
 })();
 
-// Future Price Prediction (10 yes/no -> AI price -> player's guess; hide AI price until after guess)
+// Future Price Prediction — fixed flow (answers → guess → reveal)
 (function(){
   const card = document.getElementById('fpp-card');
   if(!card) return;
@@ -352,7 +353,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       intro.style.display = 'block';
       intro.textContent = `Product: ${product} — Current Price: ${currency} ${currentPrice}`;
 
-      // Start Q&A
       ix = 0;
       show(qaWrap);
       hide(actions);
@@ -377,7 +377,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   yesBtn?.addEventListener('click', ()=>answer(true));
   noBtn?.addEventListener('click',  ()=>answer(false));
 
-  // After generating the AI price, DO NOT show it yet — prompt for guess
   genBtn?.addEventListener('click', async ()=>{
     if(!token) return;
     out.textContent = '💹 Preparing the 5-year scenario...';
@@ -388,8 +387,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       });
       const json = await res.json();
       if(!json.ok){ out.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
-
-      // Hide AI price & reasoning here — just prompt for guess now
       out.textContent = `All set. Now enter your 5-year price guess for ${product}.`;
       show(guessWrap);
     }catch{
@@ -397,7 +394,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
     }
   });
 
-  // Reveal AI price ONLY after the player's guess, alongside result
   submitGuess?.addEventListener('click', async ()=>{
     if(!token) return;
     const g = Number(guessInput.value);
@@ -411,11 +407,10 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       const json = await res.json();
       if(!json.ok){ out.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
 
-      // Now show both values & result
       out.textContent =
         (json.win
-          ? `🎉 Great guess! You matched within 60%.\n\nYour Guess: ${json.currency} ${json.playerGuess}\nAI Price:  ${json.currency} ${json.aiPrice}`
-          : `❌ Not quite. Better luck next time!\n\nYour Guess: ${json.currency} ${json.playerGuess}\nAI Price:  ${json.currency} ${json.aiPrice}`
+          ? `🎉 Great guess! You matched within 60%.\n\nYour Guess: ${json.currency} ${json.playerGuess}\nAI Price:  ${json.currency} ${json.aiPrice}\n\n${json.explanation || ''}`
+          : `❌ Not quite. Better luck next time!\n\nYour Guess: ${json.currency} ${json.playerGuess}\nAI Price:  ${json.currency} ${json.aiPrice}\n\n${json.explanation || ''}`
         );
 
       guessInput.value = '';
@@ -425,8 +420,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   });
 })();
 
-// Budget Glam Builder — 180s, 30 items, 10-per-page, min pick = 12
-// Glam Builder
+// Glam Builder — fixed to use /api/glam/score and token/items
 (function(){
   const form = document.querySelector('#glam-start');
   if(!form) return;
@@ -440,20 +434,21 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   const nextBtn   = document.querySelector('#glam-next');
   const finishBtn = document.querySelector('#glam-finish');
 
-  let sessionId = null;
-  let products = [];
+  let token = null;
+  let items = [];
   let page = 0;
   let selected = new Set();
   let tHandle = null;
   let timeLeft = 180;
+  let budgetShown = 0;
 
   function renderPage(){
     productsEl.innerHTML = '';
     const start = page*10, end = start+10;
-    products.slice(start,end).forEach((p,idx)=>{
+    items.slice(start,end).forEach((p,idx)=>{
       const d = document.createElement('div');
       d.className = 'option';
-      d.textContent = `${p.name} — ₹${p.price} (${p.desc})`;
+      d.textContent = `${p.name} — ₹${p.price} (${p.description})`;
       d.style.cursor = 'pointer';
       if(selected.has(start+idx)) d.style.background='rgba(80,200,120,.2)';
       d.onclick = ()=>{
@@ -464,12 +459,13 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       productsEl.appendChild(d);
     });
     prevBtn.style.display = (page>0)?'inline-block':'none';
-    nextBtn.style.display = (end<products.length)?'inline-block':'none';
+    nextBtn.style.display = (end<items.length)?'inline-block':'none';
   }
 
   function clearTimer(){ if(tHandle) clearInterval(tHandle); tHandle=null; }
   function startTimer(){
     clearTimer();
+    timeLeft = 180;
     timerEl.textContent = `⏱ ${timeLeft}s`;
     tHandle = setInterval(()=>{
       timeLeft -= 1;
@@ -481,18 +477,18 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   async function finishGame(){
     clearTimer();
     try{
-      const res = await fetch('/api/glam/finish',{
+      const res = await fetch('/api/glam/score',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ sessionId, picks: Array.from(selected) })
+        body: JSON.stringify({ token, selectedIndices: Array.from(selected), timeTaken: 180 - timeLeft })
       });
       const json = await res.json();
       if(json.ok){
         resultEl.style.display='block';
         if(json.win){
-          resultEl.textContent = `🎉 Congrats! Score: ${json.score}/100\n\nHighlights:\n${json.points}`;
+          resultEl.textContent = `🎉 Congrats! Score: ${json.score}/100\n${json.summary}`;
         } else {
-          resultEl.textContent = `❌ Failed. Score: ${json.score}/100\n\nReasons:\n${json.points}`;
+          resultEl.textContent = `❌ Score: ${json.score}/100\n${json.summary}`;
         }
       } else {
         resultEl.style.display='block';
@@ -502,7 +498,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   }
 
   prevBtn.onclick=()=>{ if(page>0){ page--; renderPage(); } };
-  nextBtn.onclick=()=>{ if((page+1)*10<products.length){ page++; renderPage(); } };
+  nextBtn.onclick=()=>{ if((page+1)*10<items.length){ page++; renderPage(); } };
   finishBtn.onclick=(e)=>{ e.preventDefault(); finishGame(); };
 
   form.addEventListener('submit', async (e)=>{
@@ -514,15 +510,16 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       const res=await fetch('/api/glam/start',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({gender,budget})
+        body: JSON.stringify({ gender, budgetInr: budget })
       });
       const json=await res.json();
       if(!json.ok){ productsEl.innerHTML='Error: '+json.error; return; }
-      sessionId=json.sessionId;
-      products=json.products;
-      budgetEl.textContent=`Budget: ₹${budget}`;
+      token=json.token;
+      items=json.items || [];
+      budgetShown=json.budgetInr || budget;
+      budgetEl.textContent=`Budget: ₹${budgetShown}`;
       gameDiv.style.display='block';
-      page=0; selected.clear(); timeLeft=180;
+      page=0; selected.clear();
       renderPage(); startTimer();
     }catch{ productsEl.innerHTML='Network error'; }
   });
