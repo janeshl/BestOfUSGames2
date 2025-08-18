@@ -1,6 +1,11 @@
-function $(s){return document.querySelector(s)}function $all(s){return Array.from(document.querySelectorAll(s))}function setText(e,t){if(e)e.textContent=t}function html(e,m){if(e)e.innerHTML=m}
+function $(s){return document.querySelector(s)}
+function $all(s){return Array.from(document.querySelectorAll(s))}
+function setText(e,t){if(e)e.textContent=t}
+function html(e,m){if(e)e.innerHTML=m}
 
-// Predict the Future
+/* ========================
+   Game 1: Predict the Future
+======================== */
 (function(){
   const form = $('#f-form');
   const out = $('#f-out');
@@ -18,8 +23,9 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   });
 })();
 
-// 5-Round Quiz with 20s per-question timer (auto-mark wrong on timeout)
-// (Now avoids repeating previous questions server-side per topic)
+/* ========================
+   Game 2: 5-Round Quiz (20s timer, resilient errors, win if >=4)
+======================== */
 (function(){
   const startForm = document.querySelector('#quiz-start');
   if(!startForm) return;
@@ -33,9 +39,9 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   const nextEl = document.querySelector('#quiz-next');
 
   let token = null;
-  let lock = false;           // prevents double answers
-  let tHandle = null;         // interval handle
-  let timeLeft = 20;          // seconds per question
+  let lock = false;
+  let tHandle = null;
+  let timeLeft = 20;
 
   function clearTimer(){
     if(tHandle){ clearInterval(tHandle); tHandle = null; }
@@ -49,7 +55,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       timerEl.textContent = `⏱ ${timeLeft}s`;
       if(timeLeft <= 0){
         clearTimer();
-        if(!lock) onExpire(); // auto-mark wrong
+        if(!lock) onExpire();
       }
     }, 1000);
   }
@@ -65,6 +71,11 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ token, choice: choiceIndex })
       });
+      if(!res.ok){
+        const text = await res.text().catch(()=> '');
+        nextEl.innerHTML = '<div class="pill">Error: '+(text || res.statusText || 'Unknown')+'</div>';
+        lock = false; return;
+      }
       const json = await res.json();
       if(!json.ok){
         nextEl.innerHTML = '<div class="pill">Error: '+(json.error||'Unknown')+'</div>';
@@ -85,7 +96,10 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       }
 
       if(json.done){
-        nextEl.innerHTML = '<div class="pill">🏁 Finished! Score: '+json.score+' / '+json.total+'</div>';
+        const win = Number(json.score) >= 4;
+        nextEl.innerHTML = win
+          ? `<div class="pill">🎉 You win! Score: ${json.score} / ${json.total}</div>`
+          : `<div class="pill">❌ Failed. Score: ${json.score} / ${json.total}</div>`;
         return;
       }
 
@@ -99,7 +113,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       nextEl.appendChild(b);
 
       lock = false;
-    }catch{
+    }catch(e){
       nextEl.innerHTML = '<div class="pill">Network error. Please try again.</div>';
       lock = false;
     }
@@ -137,6 +151,11 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ topic })
       });
+      if(!res.ok){
+        const text = await res.text().catch(()=> '');
+        optsEl.innerHTML = 'Error: ' + (text || res.statusText || 'Unknown error');
+        return;
+      }
       const json = await res.json();
       if(!json.ok){ optsEl.innerHTML = 'Error: ' + (json.error || 'Unknown error'); return; }
       token = json.token;
@@ -147,14 +166,15 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   });
 })();
 
-// Find the Character (conversational) — hard level & multiple hints after 7th
+/* ========================
+   Game 3: Find the Character (hard level & multi-hints)
+======================== */
 (function(){
   const startForm = $('#start-form');
   const turnForm = $('#turn-form');
   const chat = $('#chat');
   const rounds = $('#rounds');
   const result = $('#result');
-  const answerBox = $('#answer-box');
   if(!startForm || !chat) return;
   let sessionId = null, roundsLeft = 10;
 
@@ -196,19 +216,20 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
         const json = await res.json();
         if(!json.ok){ pushMsg('AI', 'Error: ' + (json.error || 'Unknown error')); return; }
 
-        if(json.answer){ pushMsg('AI', json.answer); if(answerBox){ answerBox.textContent = json.answer; } }
+        if(json.answer){ pushMsg('AI', json.answer); }
 
-        // Show multiple hints (after round 7)
+        // Show multiple hints after round 7
         if(Array.isArray(json.hints) && json.hints.length){
           json.hints.forEach((h)=> pushMsg('AI', '💡 Hint: ' + h));
         }
 
         if(json.done){
           if(json.win){
-            html(result, '<div class="pill">🎉 Correct! You found the character.</div>');
-            pushMsg('AI', json.message || '🎉 Congrats!');
+            pushMsg('AI', json.message || '🎉 Congrats! You found it!');
+            html(result, '<div class="pill">🎉 Correct! Amazing deduction.</div>');
           } else {
-            html(result, '<div class="pill">🕵️ Out of rounds.</div>');
+            const correct = json.name ? ` The character was <b>${json.name}</b>.` : '';
+            html(result, `<div class="pill">🔚 Better luck next time.${correct}</div>`);
             if(json.message) pushMsg('AI', json.message);
           }
           sessionId = null;
@@ -220,7 +241,9 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   }
 })();
 
-// Find the Healthy-Diet (8 Qs; 4 + 4; then generate plan)
+/* ========================
+   Game 4: Find the Healthy-Diet (10 Qs; 5 + 5)
+======================== */
 (function(){
   const card = document.getElementById('hd-card');
   if(!card) return;
@@ -233,7 +256,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
 
   let token = null;
   let questions = [];
-  const answers = new Array(8).fill("");
+  const answers = new Array(10).fill("");
 
   const show = (el) => el && el.classList.remove('hidden');
   const hide = (el) => el && el.classList.add('hidden');
@@ -245,14 +268,13 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       if(!json.ok){ loading.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
       token = json.token;
       questions = json.questions || [];
-      document.getElementById('hd-q1').textContent = questions[0] || 'Question 1';
-      document.getElementById('hd-q2').textContent = questions[1] || 'Question 2';
-      document.getElementById('hd-q3').textContent = questions[2] || 'Question 3';
-      document.getElementById('hd-q4').textContent = questions[3] || 'Question 4';
-      document.getElementById('hd-q5').textContent = questions[4] || 'Question 5';
-      document.getElementById('hd-q6').textContent = questions[5] || 'Question 6';
-      document.getElementById('hd-q7').textContent = questions[6] || 'Question 7';
-      document.getElementById('hd-q8').textContent = questions[7] || 'Question 8';
+
+      // Fill labels (10)
+      for(let i=1;i<=10;i++){
+        const el = document.getElementById('hd-q'+i);
+        if(el) el.textContent = questions[i-1] || ('Question '+i);
+      }
+
       hide(loading); show(r1);
     }catch{
       loading.textContent = 'Network error. Please try again.';
@@ -261,21 +283,21 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
 
   r1?.addEventListener('submit', (e)=>{
     e.preventDefault();
-    const a1 = r1.a1.value.trim(), a2 = r1.a2.value.trim(), a3 = r1.a3.value.trim(), a4 = r1.a4.value.trim();
-    if(!a1 || !a2 || !a3 || !a4) return;
-    answers[0]=a1; answers[1]=a2; answers[2]=a3; answers[3]=a4;
-    r1.a1.value=''; r1.a2.value=''; r1.a3.value=''; r1.a4.value='';
+    const vals = [r1.a1.value, r1.a2.value, r1.a3.value, r1.a4.value, r1.a5.value].map(v => (v||'').trim());
+    if(vals.some(v=>!v)) return;
+    for(let i=0;i<5;i++) answers[i]=vals[i];
+    r1.a1.value=''; r1.a2.value=''; r1.a3.value=''; r1.a4.value=''; r1.a5.value='';
     hide(r1); show(r2);
   });
 
   r2?.addEventListener('submit', (e)=>{
     e.preventDefault();
-    const a5 = r2.a5.value.trim(), a6 = r2.a6.value.trim(), a7 = r2.a7.value.trim(), a8 = r2.a8.value.trim();
-    if(!a5 || !a6 || !a7 || !a8) return;
-    answers[4]=a5; answers[5]=a6; answers[6]=a7; answers[7]=a8;
-    r2.a5.value=''; r2.a6.value=''; r2.a7.value=''; r2.a8.value='';
+    const vals = [r2.a6.value, r2.a7.value, r2.a8.value, r2.a9.value, r2.a10.value].map(v => (v||'').trim());
+    if(vals.some(v=>!v)) return;
+    for(let i=0;i<5;i++) answers[5+i]=vals[i];
+    r2.a6.value=''; r2.a7.value=''; r2.a8.value=''; r2.a9.value=''; r2.a10.value='';
     hide(r2); show(actions);
-    out.textContent = "Ready to generate a personalized diet plan based on your answers.";
+    out.textContent = "Ready to generate a personalized diet plan based on your 10 answers.";
   });
 
   document.getElementById('hd-generate')?.addEventListener('click', async ()=>{
@@ -297,7 +319,9 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   start();
 })();
 
-// Future Price Prediction — fixed flow (answers → guess → reveal)
+/* ========================
+   Game 5: Future Price Prediction
+======================== */
 (function(){
   const card = document.getElementById('fpp-card');
   if(!card) return;
@@ -335,7 +359,7 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   startForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
     out.textContent = '';
-    const category = startForm.category.value.trim();
+    const category = startForm.category?.value?.trim?.() || '';
     try{
       const res = await fetch('/api/fpp/start', {
         method:'POST',
@@ -420,13 +444,13 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   });
 })();
 
-// Glam Builder — fixed to use /api/glam/score and token/items
-// Glam Builder — wired to new HTML structure
+/* ========================
+   Game 6: Budget Glam Builder — show name, price, description, tags
+======================== */
 (function(){
   const form = document.querySelector('#glam-start');
   if(!form) return;
 
-  // New DOM refs per provided HTML
   const hud        = document.querySelector('#glam-hud');
   const timerEl    = document.querySelector('#glam-timer');
   const budgetEl   = document.querySelector('#glam-budget');
@@ -444,18 +468,15 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
 
   const outEl      = document.querySelector('#glam-out');
 
-  // State
   let token = null;
   let items = [];
-  let page = 0;                // 0-based
-  let selected = new Set();    // holds absolute indices
+  let page = 0;
+  let selected = new Set();
   let tHandle = null;
   let timeLeft = 180;
   let budgetInr = 0;
-
   const perPage = 10;
 
-  // Helpers
   const show = (el) => el && el.classList.remove('hidden');
   const hide = (el) => el && el.classList.add('hidden');
 
@@ -472,14 +493,10 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
   }
 
   function updateHUD(){
-    // Budget
     budgetEl.textContent = `Budget: ₹${budgetInr}`;
-    // Spend
     const spend = Array.from(selected).reduce((sum, idx)=> sum + (Number(items[idx]?.price)||0), 0);
     spendEl.textContent = `Spend: ₹${spend}`;
-    // Count
     countEl.textContent = `Selected: ${selected.size}/12`;
-    // Page
     const totalPages = Math.max(1, Math.ceil(items.length / perPage));
     pageEl.textContent = `Page: ${Math.min(page+1, totalPages)}`;
   }
@@ -493,15 +510,22 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       const p = items[i];
       const div = document.createElement('div');
       div.className = 'option';
-      div.textContent = `${p.name} — ₹${p.price} (${p.description})`;
+      // Tags: category + eco flag; allow extra tags if present
+      const tagsArr = Array.isArray(p.tags) ? p.tags : [];
+      const ecoTag = p.ecoFriendly ? 'Eco-Friendly' : null;
+      const baseTags = [p.category || null, ecoTag].filter(Boolean);
+      const allTags = [...baseTags, ...tagsArr].filter(Boolean).slice(0, 4);
+      const tagsStr = allTags.length ? ` [${allTags.join(' · ')}]` : '';
+
+      div.textContent = `${p.name} — ₹${p.price}${tagsStr}\n${p.description || ''}`;
+      div.style.whiteSpace = 'pre-wrap';
       div.style.cursor = 'pointer';
-      if(selected.has(i)) div.classList.add('selected'); // rely on CSS .selected or keep fallback bg:
-      // fallback highlight if no CSS rule:
+
+      if(selected.has(i)) div.classList.add('selected');
       if(selected.has(i)) div.style.background = 'rgba(80,200,120,.2)'; else div.style.background = '';
 
       div.onclick = ()=>{
         if(selected.has(i)) selected.delete(i); else selected.add(i);
-        // re-render row visual quickly without full re-render:
         if(selected.has(i)) { div.classList.add('selected'); div.style.background = 'rgba(80,200,120,.2)'; }
         else { div.classList.remove('selected'); div.style.background = ''; }
         updateHUD();
@@ -510,7 +534,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       listEl.appendChild(div);
     }
 
-    // Pager buttons
     prevBtn.disabled = page === 0;
     nextBtn.disabled = end >= items.length;
 
@@ -537,7 +560,6 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
         outEl.textContent = 'Error: ' + (json.error || 'Unknown error');
         return;
       }
-      // Show concise summary
       outEl.textContent = (json.win ? '🎉 Congrats! ' : '❌ ') +
         `Score: ${json.score}/100\n` +
         (json.summary ? `${json.summary}\n` : '') +
@@ -547,14 +569,10 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
     }
   }
 
-  // Pager handlers
   prevBtn.addEventListener('click', ()=>{ if(page>0){ page--; renderPage(); } });
   nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length){ page++; renderPage(); } });
-
-  // Finish
   finishBtn.addEventListener('click', (e)=>{ e.preventDefault(); finishGame(); });
 
-  // Start form
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
     hide(outEl);
@@ -582,13 +600,11 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
       selected.clear();
       page = 0;
 
-      // Show UI sections
       show(hud);
       show(listEl);
       show(pagerRow);
       show(actionsRow);
 
-      // Render + timer
       renderPage();
       startTimer();
     }catch{
@@ -596,4 +612,3 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
     }
   });
 })();
-
