@@ -421,106 +421,180 @@ function $(s){return document.querySelector(s)}function $all(s){return Array.fro
 })();
 
 // Glam Builder — fixed to use /api/glam/score and token/items
+// Glam Builder — wired to new HTML structure
 (function(){
   const form = document.querySelector('#glam-start');
   if(!form) return;
 
-  const gameDiv   = document.querySelector('#glam-game');
-  const budgetEl  = document.querySelector('#glam-budget');
-  const timerEl   = document.querySelector('#glam-timer');
-  const productsEl= document.querySelector('#glam-products');
-  const resultEl  = document.querySelector('#glam-result');
-  const prevBtn   = document.querySelector('#glam-prev');
-  const nextBtn   = document.querySelector('#glam-next');
-  const finishBtn = document.querySelector('#glam-finish');
+  // New DOM refs per provided HTML
+  const hud        = document.querySelector('#glam-hud');
+  const timerEl    = document.querySelector('#glam-timer');
+  const budgetEl   = document.querySelector('#glam-budget');
+  const spendEl    = document.querySelector('#glam-spend');
+  const countEl    = document.querySelector('#glam-count');
+  const pageEl     = document.querySelector('#glam-page');
 
+  const listEl     = document.querySelector('#glam-list');
+  const pagerRow   = document.querySelector('#glam-pager');
+  const prevBtn    = document.querySelector('#glam-prev');
+  const nextBtn    = document.querySelector('#glam-next');
+
+  const actionsRow = document.querySelector('#glam-actions');
+  const finishBtn  = document.querySelector('#glam-finish');
+
+  const outEl      = document.querySelector('#glam-out');
+
+  // State
   let token = null;
   let items = [];
-  let page = 0;
-  let selected = new Set();
+  let page = 0;                // 0-based
+  let selected = new Set();    // holds absolute indices
   let tHandle = null;
   let timeLeft = 180;
-  let budgetShown = 0;
+  let budgetInr = 0;
 
-  function renderPage(){
-    productsEl.innerHTML = '';
-    const start = page*10, end = start+10;
-    items.slice(start,end).forEach((p,idx)=>{
-      const d = document.createElement('div');
-      d.className = 'option';
-      d.textContent = `${p.name} — ₹${p.price} (${p.description})`;
-      d.style.cursor = 'pointer';
-      if(selected.has(start+idx)) d.style.background='rgba(80,200,120,.2)';
-      d.onclick = ()=>{
-        if(selected.has(start+idx)) selected.delete(start+idx);
-        else selected.add(start+idx);
-        renderPage();
-      };
-      productsEl.appendChild(d);
-    });
-    prevBtn.style.display = (page>0)?'inline-block':'none';
-    nextBtn.style.display = (end<items.length)?'inline-block':'none';
-  }
+  const perPage = 10;
 
-  function clearTimer(){ if(tHandle) clearInterval(tHandle); tHandle=null; }
+  // Helpers
+  const show = (el) => el && el.classList.remove('hidden');
+  const hide = (el) => el && el.classList.add('hidden');
+
+  function clearTimer(){ if(tHandle){ clearInterval(tHandle); tHandle = null; } }
   function startTimer(){
     clearTimer();
     timeLeft = 180;
-    timerEl.textContent = `⏱ ${timeLeft}s`;
+    timerEl.textContent = `Time: ${timeLeft}s`;
     tHandle = setInterval(()=>{
       timeLeft -= 1;
-      timerEl.textContent = `⏱ ${timeLeft}s`;
+      timerEl.textContent = `Time: ${timeLeft}s`;
       if(timeLeft <= 0){ clearTimer(); finishGame(); }
-    },1000);
+    }, 1000);
+  }
+
+  function updateHUD(){
+    // Budget
+    budgetEl.textContent = `Budget: ₹${budgetInr}`;
+    // Spend
+    const spend = Array.from(selected).reduce((sum, idx)=> sum + (Number(items[idx]?.price)||0), 0);
+    spendEl.textContent = `Spend: ₹${spend}`;
+    // Count
+    countEl.textContent = `Selected: ${selected.size}/12`;
+    // Page
+    const totalPages = Math.max(1, Math.ceil(items.length / perPage));
+    pageEl.textContent = `Page: ${Math.min(page+1, totalPages)}`;
+  }
+
+  function renderPage(){
+    listEl.innerHTML = '';
+    const start = page * perPage;
+    const end   = Math.min(items.length, start + perPage);
+
+    for(let i=start; i<end; i++){
+      const p = items[i];
+      const div = document.createElement('div');
+      div.className = 'option';
+      div.textContent = `${p.name} — ₹${p.price} (${p.description})`;
+      div.style.cursor = 'pointer';
+      if(selected.has(i)) div.classList.add('selected'); // rely on CSS .selected or keep fallback bg:
+      // fallback highlight if no CSS rule:
+      if(selected.has(i)) div.style.background = 'rgba(80,200,120,.2)'; else div.style.background = '';
+
+      div.onclick = ()=>{
+        if(selected.has(i)) selected.delete(i); else selected.add(i);
+        // re-render row visual quickly without full re-render:
+        if(selected.has(i)) { div.classList.add('selected'); div.style.background = 'rgba(80,200,120,.2)'; }
+        else { div.classList.remove('selected'); div.style.background = ''; }
+        updateHUD();
+      };
+
+      listEl.appendChild(div);
+    }
+
+    // Pager buttons
+    prevBtn.disabled = page === 0;
+    nextBtn.disabled = end >= items.length;
+
+    updateHUD();
   }
 
   async function finishGame(){
     clearTimer();
+    outEl.style.display = 'block';
+    outEl.textContent = 'Scoring your kit...';
+
     try{
-      const res = await fetch('/api/glam/score',{
+      const res = await fetch('/api/glam/score', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ token, selectedIndices: Array.from(selected), timeTaken: 180 - timeLeft })
+        body: JSON.stringify({
+          token,
+          selectedIndices: Array.from(selected),
+          timeTaken: 180 - Math.max(0, timeLeft)
+        })
       });
       const json = await res.json();
-      if(json.ok){
-        resultEl.style.display='block';
-        if(json.win){
-          resultEl.textContent = `🎉 Congrats! Score: ${json.score}/100\n${json.summary}`;
-        } else {
-          resultEl.textContent = `❌ Score: ${json.score}/100\n${json.summary}`;
-        }
-      } else {
-        resultEl.style.display='block';
-        resultEl.textContent = 'Error: '+json.error;
+      if(!json.ok){
+        outEl.textContent = 'Error: ' + (json.error || 'Unknown error');
+        return;
       }
-    }catch{ resultEl.textContent='Network error.'; }
+      // Show concise summary
+      outEl.textContent = (json.win ? '🎉 Congrats! ' : '❌ ') +
+        `Score: ${json.score}/100\n` +
+        (json.summary ? `${json.summary}\n` : '') +
+        `Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`;
+    }catch{
+      outEl.textContent = 'Network error.';
+    }
   }
 
-  prevBtn.onclick=()=>{ if(page>0){ page--; renderPage(); } };
-  nextBtn.onclick=()=>{ if((page+1)*10<items.length){ page++; renderPage(); } };
-  finishBtn.onclick=(e)=>{ e.preventDefault(); finishGame(); };
+  // Pager handlers
+  prevBtn.addEventListener('click', ()=>{ if(page>0){ page--; renderPage(); } });
+  nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length){ page++; renderPage(); } });
 
+  // Finish
+  finishBtn.addEventListener('click', (e)=>{ e.preventDefault(); finishGame(); });
+
+  // Start form
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
-    const gender=form.gender.value;
-    const budget=Number(form.budget.value);
-    productsEl.innerHTML='Loading...';
+    hide(outEl);
+    outEl.textContent = '';
+    listEl.textContent = 'Loading...';
+
+    const gender = form.gender.value;
+    const budget = Number(form.budget.value);
+
     try{
-      const res=await fetch('/api/glam/start',{
+      const res = await fetch('/api/glam/start', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ gender, budgetInr: budget })
       });
-      const json=await res.json();
-      if(!json.ok){ productsEl.innerHTML='Error: '+json.error; return; }
-      token=json.token;
-      items=json.items || [];
-      budgetShown=json.budgetInr || budget;
-      budgetEl.textContent=`Budget: ₹${budgetShown}`;
-      gameDiv.style.display='block';
-      page=0; selected.clear();
-      renderPage(); startTimer();
-    }catch{ productsEl.innerHTML='Network error'; }
+      const json = await res.json();
+      if(!json.ok){
+        listEl.textContent = 'Error: ' + (json.error || 'Unknown error');
+        return;
+      }
+
+      token      = json.token;
+      items      = Array.isArray(json.items) ? json.items : [];
+      budgetInr  = Number(json.budgetInr) || budget || 0;
+      selected.clear();
+      page = 0;
+
+      // Show UI sections
+      show(hud);
+      show(listEl);
+      show(pagerRow);
+      show(actionsRow);
+
+      // Render + timer
+      renderPage();
+      startTimer();
+    }catch{
+      listEl.textContent = 'Network error';
+    }
   });
+})();
+
 })();
