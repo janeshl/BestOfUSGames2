@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Find the Healthy-Diet</title>
+  <link rel="stylesheet" href="styling.css" />
+</head>
+<body class="container">
+  <h2 class="section-title">Find the Healthy-Diet</h2>
+
+  <article class="card" id="hd-card">
+    <div id="hd-loading" class="pill">Loading questions...</div>
+
+    <!-- Round 1 -->
+    <form id="hd-round1" class="game-form hidden" autocomplete="off">
+      <div id="hd-q1" class="card-copy"></div>
+      <input name="a1" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <div id="hd-q2" class="card-copy"></div>
+      <input name="a2" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <div id="hd-q3" class="card-copy"></div>
+      <input name="a3" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <div id="hd-q4" class="card-copy"></div>
+      <input name="a4" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <button class="btn" type="submit"><span>Next</span></button>
+    </form>
+
+    <!-- Round 2 -->
+    <form id="hd-round2" class="game-form hidden" autocomplete="off">
+      <div id="hd-q5" class="card-copy"></div>
+      <input name="a5" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <div id="hd-q6" class="card-copy"></div>
+      <input name="a6" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <div id="hd-q7" class="card-copy"></div>
+      <input name="a7" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <div id="hd-q8" class="card-copy"></div>
+      <input name="a8" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false" />
+
+      <button class="btn" type="submit"><span>Confirm Answers</span></button>
+    </form>
+
+    <!-- Generate plan -->
+    <div id="hd-actions" class="hidden" style="margin-top:10px;">
+      <button id="hd-generate" class="btn"><span>Generate Diet Plan</span></button>
+    </div>
+
+    <pre id="hd-output" class="result" style="margin-top:12px;"></pre>
+  </article>
+
+  <div style="margin-top:24px;display:flex;justify-content:flex-start;">
+    <a href="./games.html" class="back">← Back</a>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
