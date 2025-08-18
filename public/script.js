@@ -27,7 +27,6 @@ function html(e,m){if(e)e.innerHTML=m}
 
 /* ========================
    5-Round Quiz with 20s timer, win/lose message
-   - Resilient to API hiccups
 ======================== */
 (function(){
   const startForm = document.querySelector('#quiz-start');
@@ -256,7 +255,6 @@ function html(e,m){if(e)e.innerHTML=m}
 
   let token = null;
   let questions = [];
-  // read how many inputs present in each form (defensive: supports 4/5 per round)
   const r1Inputs = r1 ? Array.from(r1.querySelectorAll('input[name^="a"]')) : [];
   const r2Inputs = r2 ? Array.from(r2.querySelectorAll('input[name^="a"]')) : [];
   const totalSlots = r1Inputs.length + r2Inputs.length;
@@ -327,7 +325,10 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Budget Glam Builder — robust Finish Now -> Results Page
+   Budget Glam Builder — fixes:
+   - Keep start form hidden after start & after finish
+   - Prevent selecting beyond budget
+   - Robust Finish Now -> Results view
 ======================== */
 (function(){
   const form = document.querySelector('#glam-start');
@@ -339,6 +340,8 @@ function html(e,m){if(e)e.innerHTML=m}
   const spendEl    = document.querySelector('#glam-spend');
   const countEl    = document.querySelector('#glam-count');
   const pageEl     = document.querySelector('#glam-page');
+
+  const toastEl    = document.querySelector('#glam-toast');
 
   const listEl     = document.querySelector('#glam-list');
   const pagerRow   = document.querySelector('#glam-pager');
@@ -363,6 +366,14 @@ function html(e,m){if(e)e.innerHTML=m}
   const show = (el) => el && el.classList.remove('hidden');
   const hide = (el) => el && el.classList.add('hidden');
 
+  function showToast(msg){
+    if(!toastEl) return;
+    toastEl.textContent = msg || '';
+    toastEl.classList.remove('hidden');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(()=> toastEl.classList.add('hidden'), 2200);
+  }
+
   function clearTimer(){ if(tHandle){ clearInterval(tHandle); tHandle = null; } }
   function startTimer(){
     clearTimer();
@@ -376,13 +387,16 @@ function html(e,m){if(e)e.innerHTML=m}
     }, 1000);
   }
 
+  function currentSpend(){
+    return Array.from(selected).reduce((sum, idx)=> sum + (Number(items[idx]?.price)||0), 0);
+  }
+
   function updateHUD(){
     budgetEl.textContent = `Budget: ₹${budgetInr}`;
-    const spend = Array.from(selected).reduce((sum, idx)=> sum + (Number(items[idx]?.price)||0), 0);
-    spendEl.textContent = `Spend: ₹${spend}`;
-    countEl.textContent = `Selected: ${selected.size}/12`;
+    spendEl.textContent  = `Spend: ₹${currentSpend()}`;
+    countEl.textContent  = `Selected: ${selected.size}/12`;
     const totalPages = Math.max(1, Math.ceil(items.length / perPage));
-    pageEl.textContent = `Page: ${Math.min(page+1, totalPages)}`;
+    pageEl.textContent   = `Page: ${Math.min(page+1, totalPages)}`;
   }
 
   function renderPage(){
@@ -408,8 +422,25 @@ function html(e,m){if(e)e.innerHTML=m}
 
       div.onclick = ()=>{
         if(finishing) return; // prevent changes while finishing
-        if(selected.has(i)) selected.delete(i); else selected.add(i);
-        div.style.background = selected.has(i) ? 'rgba(80,200,120,.2)' : '';
+
+        if(selected.has(i)){
+          // remove selection
+          selected.delete(i);
+          div.style.background = '';
+          updateHUD();
+          return;
+        }
+
+        // try add — block if budget would be exceeded
+        const prospective = currentSpend() + (Number(p.price)||0);
+        if(prospective > budgetInr){
+          showToast(`🚫 Over budget: selecting this would cost ₹${prospective} (> ₹${budgetInr})`);
+          return;
+        }
+
+        // add selection
+        selected.add(i);
+        div.style.background = 'rgba(80,200,120,.2)';
         updateHUD();
       };
 
@@ -423,7 +454,8 @@ function html(e,m){if(e)e.innerHTML=m}
   }
 
   function renderResults(json){
-    // Hide game UI, show a dedicated "results page" in the same card
+    // Hide gameplay UI and keep start form hidden (so it doesn't look like we "went back")
+    form.style.display = 'none';
     hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
     outEl.style.display = 'block';
 
@@ -450,6 +482,9 @@ function html(e,m){if(e)e.innerHTML=m}
     if(finishing) return;
     finishing = true;
     clearTimer();
+
+    // keep start form hidden (prevents "return" feel)
+    form.style.display = 'none';
 
     outEl.style.display = 'block';
     outEl.textContent = 'Scoring your kit...';
@@ -491,6 +526,9 @@ function html(e,m){if(e)e.innerHTML=m}
     const gender = form.gender.value;
     const budget = Number(form.budget.value);
 
+    // Hide the start form once the game begins to avoid the "jump back" impression
+    form.style.display = 'none';
+
     try{
       const res = await fetch('/api/glam/start', {
         method:'POST',
@@ -500,6 +538,8 @@ function html(e,m){if(e)e.innerHTML=m}
       const json = await res.json();
       if(!json.ok){
         listEl.textContent = 'Error: ' + (json.error || 'Unknown error');
+        // Show form back if start failed
+        form.style.display = '';
         return;
       }
 
@@ -514,6 +554,8 @@ function html(e,m){if(e)e.innerHTML=m}
       startTimer();
     }catch{
       listEl.textContent = 'Network error';
+      // Show form back if start failed
+      form.style.display = '';
     }
   });
 })();
