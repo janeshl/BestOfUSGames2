@@ -6,6 +6,7 @@
 <body class="container">
 <h2 class="section-title">💄 Budget Glam Builder</h2>
 <article class="card" id="glam-card">
+  <!-- Start form (we'll hide this after starting in script.js) -->
   <form id="glam-start" class="game-form" autocomplete="off">
     <div class="row">
       <select name="gender" required>
@@ -26,6 +27,9 @@
     <div class="badge" id="glam-page">Page: 1</div>
   </div>
 
+  <!-- Small toast for warnings (e.g., budget exceeded) -->
+  <div id="glam-toast" class="pill hidden" style="margin-top:8px"></div>
+
   <div id="glam-list" class="list hidden" style="margin-top:10px"></div>
 
   <div class="row hidden" id="glam-pager" style="margin-top:10px">
@@ -34,6 +38,7 @@
   </div>
 
   <div id="glam-actions" class="hidden" style="margin-top:12px">
+    <!-- Keep type="button" so it doesn't submit any form -->
     <button id="glam-finish" class="btn" type="button"><span>Finish Now</span></button>
   </div>
 
