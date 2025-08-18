@@ -4,7 +4,7 @@ function setText(e,t){if(e)e.textContent=t}
 function html(e,m){if(e)e.innerHTML=m}
 
 /* ========================
-   Game 1: Predict the Future
+   Predict the Future
 ======================== */
 (function(){
   const form = $('#f-form');
@@ -13,18 +13,21 @@ function html(e,m){if(e)e.innerHTML=m}
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     setText(out, "🔮 Summoning prophecies...");
-    const data = { name: form.name.value, birthMonth: form.birthMonth.value, favoritePlace: form.place.value };
+    const data = { name: form.name?.value, birthMonth: form.birthMonth?.value, favoritePlace: form.place?.value };
     try{
       const res = await fetch('/api/predict-future', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data) });
       const json = await res.json();
       setText(out, json.ok ? json.content : ('Error: ' + (json.error || 'Unknown error')));
-      form.name.value=''; form.birthMonth.selectedIndex=0; form.place.value='';
+      if (form.name) form.name.value='';
+      if (form.birthMonth) form.birthMonth.selectedIndex=0;
+      if (form.place) form.place.value='';
     }catch{ setText(out, 'Network error. Please try again.'); }
   });
 })();
 
 /* ========================
-   Game 2: 5-Round Quiz (20s timer, win if >=4, exclude only last round per topic)
+   5-Round Quiz with 20s timer, win/lose message
+   - Resilient to API hiccups
 ======================== */
 (function(){
   const startForm = document.querySelector('#quiz-start');
@@ -39,9 +42,9 @@ function html(e,m){if(e)e.innerHTML=m}
   const nextEl = document.querySelector('#quiz-next');
 
   let token = null;
-  let lock = false;
-  let tHandle = null;
-  let timeLeft = 20;
+  let lock = false;           // prevents double answers
+  let tHandle = null;         // interval handle
+  let timeLeft = 20;          // seconds per question
 
   function clearTimer(){
     if(tHandle){ clearInterval(tHandle); tHandle = null; }
@@ -55,13 +58,14 @@ function html(e,m){if(e)e.innerHTML=m}
       timerEl.textContent = `⏱ ${timeLeft}s`;
       if(timeLeft <= 0){
         clearTimer();
-        if(!lock) onExpire();
+        if(!lock) onExpire(); // auto-mark wrong
       }
     }, 1000);
   }
 
   async function submitAnswer(choiceIndex, clickedEl){
     if(lock) return; lock = true;
+    // stop inputs
     Array.from(optsEl.children).forEach(n => n.style.pointerEvents='none');
     clearTimer();
 
@@ -71,20 +75,17 @@ function html(e,m){if(e)e.innerHTML=m}
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ token, choice: choiceIndex })
       });
-      if(!res.ok){
-        const text = await res.text().catch(()=> '');
-        nextEl.innerHTML = '<div class="pill">Error: '+(text || res.statusText || 'Unknown')+'</div>';
-        lock = false; return;
-      }
       const json = await res.json();
       if(!json.ok){
         nextEl.innerHTML = '<div class="pill">Error: '+(json.error||'Unknown')+'</div>';
         lock = false; return;
       }
 
+      // show correctness styling if we had a clicked option
       if(clickedEl){
         clickedEl.style.borderColor = json.correct ? 'rgba(51,200,120,.8)' : 'rgba(255,80,80,.8)';
       } else {
+        // timeout path: lightly indicate timeout
         nextEl.innerHTML = '<div class="pill">⏳ Time up — counted as wrong.</div>';
       }
 
@@ -96,13 +97,14 @@ function html(e,m){if(e)e.innerHTML=m}
       }
 
       if(json.done){
-        const win = Number(json.score) >= 4;
-        nextEl.innerHTML = win
-          ? `<div class="pill">🎉 You win! Score: ${json.score} / ${json.total}</div>`
-          : `<div class="pill">❌ Failed. Score: ${json.score} / ${json.total}</div>`;
-        return;
+        const msg = json.message || (json.score >= 4
+          ? `🎉 Winner! You scored ${json.score}/${json.total}`
+          : `❌ Try again. You scored ${json.score}/${json.total}`);
+        nextEl.innerHTML = '<div class="pill">'+msg+'</div>';
+        return; // end
       }
 
+      // prepare Next button (immediate move or click-to-advance)
       nextEl.innerHTML = '';
       const b = document.createElement('button');
       b.className = 'btn'; b.textContent = 'Next';
@@ -113,7 +115,7 @@ function html(e,m){if(e)e.innerHTML=m}
       nextEl.appendChild(b);
 
       lock = false;
-    }catch(e){
+    }catch{
       nextEl.innerHTML = '<div class="pill">Network error. Please try again.</div>';
       lock = false;
     }
@@ -129,20 +131,23 @@ function html(e,m){if(e)e.innerHTML=m}
     nextEl.innerHTML = '';
     lock = false;
 
+    // Build options
     (options || []).forEach((opt, i) => {
       const d = document.createElement('div');
       d.className = 'option';
       d.textContent = (i+1) + '. ' + opt;
-      d.onclick = () => submitAnswer(i+1, d);
+      d.onclick = () => submitAnswer(i+1, d);  // user click path
       optsEl.appendChild(d);
     });
 
+    // Start the 20s timer; on expire, submit choice 0 (always wrong)
     startTimer(() => submitAnswer(0, null));
   }
 
+  // Start quiz
   startForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const topic = e.target.topic.value;
+    const topic = e.target.topic.value.trim();
     e.target.topic.value = '';
     optsEl.innerHTML = '<div class="pill">Preparing quiz...</div>';
     try{
@@ -151,11 +156,6 @@ function html(e,m){if(e)e.innerHTML=m}
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ topic })
       });
-      if(!res.ok){
-        const text = await res.text().catch(()=> '');
-        optsEl.innerHTML = 'Error: ' + (text || res.statusText || 'Unknown error');
-        return;
-      }
       const json = await res.json();
       if(!json.ok){ optsEl.innerHTML = 'Error: ' + (json.error || 'Unknown error'); return; }
       token = json.token;
@@ -167,7 +167,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Game 3: Find the Character — ONE hint at rounds 8,9,10
+   Find the Character — show ONE hint at rounds 8, 9, 10
 ======================== */
 (function(){
   const startForm = $('#start-form');
@@ -188,7 +188,7 @@ function html(e,m){if(e)e.innerHTML=m}
   startForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     html(chat, '<div class="pill">Picking a secret HARD character...</div>');
-    const topic = e.target.topic.value;
+    const topic = e.target.topic.value.trim();
     e.target.topic.value='';
     try{
       const res = await fetch('/api/character/start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ topic }) });
@@ -198,7 +198,7 @@ function html(e,m){if(e)e.innerHTML=m}
       roundsLeft = 10;
       $('#game').style.display = 'block';
       html(chat, '');
-      pushMsg('AI', json.message || 'Ask your first question!');
+      pushMsg('AI', json.message || 'Ask your first yes/no question!');
       setText(rounds, 'Rounds left: ' + roundsLeft);
     }catch{ html(chat, 'Network error. Please try again.'); }
   });
@@ -218,7 +218,7 @@ function html(e,m){if(e)e.innerHTML=m}
 
         if(json.answer){ pushMsg('AI', json.answer); }
 
-        // Show exactly one hint (if provided)
+        // Exactly one hint per round (server sends at most one from rounds 8–10)
         if(Array.isArray(json.hints) && json.hints.length){
           pushMsg('AI', '💡 Hint: ' + json.hints[0]);
         }
@@ -242,7 +242,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Game 4: Find the Healthy-Diet (10 Qs; 5 + 5)
+   Healthy Diet (defensive: works with 8 or 10 inputs; 2 rounds)
 ======================== */
 (function(){
   const card = document.getElementById('hd-card');
@@ -256,7 +256,11 @@ function html(e,m){if(e)e.innerHTML=m}
 
   let token = null;
   let questions = [];
-  const answers = new Array(10).fill("");
+  // read how many inputs present in each form (defensive: supports 4/5 per round)
+  const r1Inputs = r1 ? Array.from(r1.querySelectorAll('input[name^="a"]')) : [];
+  const r2Inputs = r2 ? Array.from(r2.querySelectorAll('input[name^="a"]')) : [];
+  const totalSlots = r1Inputs.length + r2Inputs.length;
+  const answers = new Array(totalSlots || 10).fill("");
 
   const show = (el) => el && el.classList.remove('hidden');
   const hide = (el) => el && el.classList.add('hidden');
@@ -267,11 +271,17 @@ function html(e,m){if(e)e.innerHTML=m}
       const json = await res.json();
       if(!json.ok){ loading.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
       token = json.token;
-      questions = json.questions || [];
+      questions = Array.isArray(json.questions) ? json.questions.slice(0, totalSlots || 10) : [];
 
-      for(let i=1;i<=10;i++){
-        const el = document.getElementById('hd-q'+i);
-        if(el) el.textContent = questions[i-1] || ('Question '+i);
+      // Fill round 1 labels
+      for(let i=0;i<r1Inputs.length;i++){
+        const qEl = document.getElementById('hd-q'+(i+1));
+        if(qEl) qEl.textContent = questions[i] || ('Question '+(i+1));
+      }
+      // Fill round 2 labels
+      for(let i=0;i<r2Inputs.length;i++){
+        const qEl = document.getElementById('hd-q'+(i+1+r1Inputs.length));
+        if(qEl) qEl.textContent = questions[i+r1Inputs.length] || ('Question '+(i+1+r1Inputs.length));
       }
 
       hide(loading); show(r1);
@@ -282,21 +292,19 @@ function html(e,m){if(e)e.innerHTML=m}
 
   r1?.addEventListener('submit', (e)=>{
     e.preventDefault();
-    const vals = [r1.a1.value, r1.a2.value, r1.a3.value, r1.a4.value, r1.a5.value].map(v => (v||'').trim());
-    if(vals.some(v=>!v)) return;
-    for(let i=0;i<5;i++) answers[i]=vals[i];
-    r1.a1.value=''; r1.a2.value=''; r1.a3.value=''; r1.a4.value=''; r1.a5.value='';
+    const vals = r1Inputs.map(inp => (inp.value || '').trim());
+    if(vals.some(x=>!x)) return;
+    vals.forEach((v, i) => { answers[i] = v; r1Inputs[i].value=''; });
     hide(r1); show(r2);
   });
 
   r2?.addEventListener('submit', (e)=>{
     e.preventDefault();
-    const vals = [r2.a6.value, r2.a7.value, r2.a8.value, r2.a9.value, r2.a10.value].map(v => (v||'').trim());
-    if(vals.some(v=>!v)) return;
-    for(let i=0;i<5;i++) answers[5+i]=vals[i];
-    r2.a6.value=''; r2.a7.value=''; r2.a8.value=''; r2.a9.value=''; r2.a10.value='';
+    const vals = r2Inputs.map(inp => (inp.value || '').trim());
+    if(vals.some(x=>!x)) return;
+    vals.forEach((v, i) => { answers[i + r1Inputs.length] = v; r2Inputs[i].value=''; });
     hide(r2); show(actions);
-    out.textContent = "Ready to generate a personalized diet plan based on your 10 answers.";
+    out.textContent = "Ready to generate a personalized diet plan based on your answers.";
   });
 
   document.getElementById('hd-generate')?.addEventListener('click', async ()=>{
@@ -319,132 +327,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Game 5: Future Price Prediction
-======================== */
-(function(){
-  const card = document.getElementById('fpp-card');
-  if(!card) return;
-
-  const startForm = document.getElementById('fpp-start');
-  const intro = document.getElementById('fpp-intro');
-  const qaWrap = document.getElementById('fpp-qa');
-  const status = document.getElementById('fpp-status');
-  const qEl = document.getElementById('fpp-question');
-  const yesBtn = document.getElementById('fpp-yes');
-  const noBtn = document.getElementById('fpp-no');
-  const actions = document.getElementById('fpp-actions');
-  const genBtn = document.getElementById('fpp-generate');
-  const guessWrap = document.getElementById('fpp-guess-wrap');
-  const guessInput = document.getElementById('fpp-guess');
-  const submitGuess = document.getElementById('fpp-submit-guess');
-  const out = document.getElementById('fpp-out');
-
-  let token = null;
-  let product = null;
-  let currency = null;
-  let currentPrice = null;
-  let questions = [];
-  let ix = 0;
-  const answers = new Array(10).fill(false);
-
-  function show(el){ if(el) el.classList.remove('hidden'); }
-  function hide(el){ if(el) el.classList.add('hidden'); }
-
-  function renderQuestion(){
-    status.textContent = `Question ${ix+1} of 10`;
-    qEl.textContent = questions[ix] || '';
-  }
-
-  startForm?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    out.textContent = '';
-    const category = startForm.category?.value?.trim?.() || '';
-    try{
-      const res = await fetch('/api/fpp/start', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ category: category || undefined })
-      });
-      const json = await res.json();
-      if(!json.ok){ out.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
-      token = json.token;
-      product = json.product;
-      currency = json.currency;
-      currentPrice = json.currentPrice;
-      questions = json.questions || [];
-
-      intro.style.display = 'block';
-      intro.textContent = `Product: ${product} — Current Price: ${currency} ${currentPrice}`;
-
-      ix = 0;
-      show(qaWrap);
-      hide(actions);
-      hide(guessWrap);
-      renderQuestion();
-    }catch{
-      out.textContent = 'Network error. Please try again.';
-    }
-  });
-
-  function answer(val){
-    answers[ix] = !!val;
-    ix += 1;
-    if(ix < 10){
-      renderQuestion();
-    }else{
-      hide(qaWrap);
-      show(actions);
-    }
-  }
-
-  yesBtn?.addEventListener('click', ()=>answer(true));
-  noBtn?.addEventListener('click',  ()=>answer(false));
-
-  genBtn?.addEventListener('click', async ()=>{
-    if(!token) return;
-    out.textContent = '💹 Preparing the 5-year scenario...';
-    try{
-      const res = await fetch('/api/fpp/answers', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ token, answers })
-      });
-      const json = await res.json();
-      if(!json.ok){ out.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
-      out.textContent = `All set. Now enter your 5-year price guess for ${product}.`;
-      show(guessWrap);
-    }catch{
-      out.textContent = 'Network error. Please try again.';
-    }
-  });
-
-  submitGuess?.addEventListener('click', async ()=>{
-    if(!token) return;
-    const g = Number(guessInput.value);
-    if(!isFinite(g)){ out.textContent = 'Please enter a numeric guess.'; return; }
-    out.textContent = '🔢 Checking your guess...';
-    try{
-      const res = await fetch('/api/fpp/guess', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ token, guess: g })
-      });
-      const json = await res.json();
-      if(!json.ok){ out.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
-
-      out.textContent =
-        (json.win
-          ? `🎉 Great guess! You matched within 60%.\n\nYour Guess: ${json.currency} ${json.playerGuess}\nAI Price:  ${json.currency} ${json.aiPrice}\n\n${json.explanation || ''}`
-          : `❌ Not quite. Better luck next time!\n\nYour Guess: ${json.currency} ${json.playerGuess}\nAI Price:  ${json.currency} ${json.aiPrice}\n\n${json.explanation || ''}`
-        );
-
-      guessInput.value = '';
-    }catch{
-      out.textContent = 'Network error. Please try again.';
-    }
-  });
-})();
-
-/* ========================
-   Game 6: Budget Glam Builder — products w/ tags; Finish Now -> results page
+   Budget Glam Builder — robust Finish Now -> Results Page
 ======================== */
 (function(){
   const form = document.querySelector('#glam-start');
@@ -474,6 +357,7 @@ function html(e,m){if(e)e.innerHTML=m}
   let tHandle = null;
   let timeLeft = 180;
   let budgetInr = 0;
+  let finishing = false;
   const perPage = 10;
 
   const show = (el) => el && el.classList.remove('hidden');
@@ -486,6 +370,7 @@ function html(e,m){if(e)e.innerHTML=m}
     timerEl.textContent = `Time: ${timeLeft}s`;
     tHandle = setInterval(()=>{
       timeLeft -= 1;
+      if (timeLeft < 0) timeLeft = 0;
       timerEl.textContent = `Time: ${timeLeft}s`;
       if(timeLeft <= 0){ clearTimer(); finishGame(); }
     }, 1000);
@@ -509,6 +394,7 @@ function html(e,m){if(e)e.innerHTML=m}
       const p = items[i];
       const div = document.createElement('div');
       div.className = 'option';
+
       const tagsArr = Array.isArray(p.tags) ? p.tags : [];
       const ecoTag = p.ecoFriendly ? 'Eco-Friendly' : null;
       const baseTags = [p.category || null, ecoTag].filter(Boolean);
@@ -518,10 +404,10 @@ function html(e,m){if(e)e.innerHTML=m}
       div.textContent = `${p.name} — ₹${p.price}${tagsStr}\n${p.description || ''}`;
       div.style.whiteSpace = 'pre-wrap';
       div.style.cursor = 'pointer';
-
-      if(selected.has(i)) div.style.background = 'rgba(80,200,120,.2)'; else div.style.background = '';
+      div.style.background = selected.has(i) ? 'rgba(80,200,120,.2)' : '';
 
       div.onclick = ()=>{
+        if(finishing) return; // prevent changes while finishing
         if(selected.has(i)) selected.delete(i); else selected.add(i);
         div.style.background = selected.has(i) ? 'rgba(80,200,120,.2)' : '';
         updateHUD();
@@ -530,13 +416,14 @@ function html(e,m){if(e)e.innerHTML=m}
       listEl.appendChild(div);
     }
 
-    prevBtn.disabled = page === 0;
-    nextBtn.disabled = end >= items.length;
+    prevBtn.disabled = page === 0 || finishing;
+    nextBtn.disabled = end >= items.length || finishing;
 
     updateHUD();
   }
 
   function renderResults(json){
+    // Hide game UI, show a dedicated "results page" in the same card
     hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
     outEl.style.display = 'block';
 
@@ -560,7 +447,10 @@ function html(e,m){if(e)e.innerHTML=m}
   }
 
   async function finishGame(){
+    if(finishing) return;
+    finishing = true;
     clearTimer();
+
     outEl.style.display = 'block';
     outEl.textContent = 'Scoring your kit...';
 
@@ -577,20 +467,23 @@ function html(e,m){if(e)e.innerHTML=m}
       const json = await res.json();
       if(!json.ok){
         outEl.textContent = 'Error: ' + (json.error || 'Unknown error');
+        finishing = false;
         return;
       }
-      renderResults(json);
+      renderResults(json); // ✅ navigate to results view
     }catch{
       outEl.textContent = 'Network error.';
+      finishing = false;
     }
   }
 
-  prevBtn.addEventListener('click', ()=>{ if(page>0){ page--; renderPage(); } });
-  nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length){ page++; renderPage(); } });
+  prevBtn.addEventListener('click', ()=>{ if(page>0 && !finishing){ page--; renderPage(); } });
+  nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length && !finishing){ page++; renderPage(); } });
   finishBtn.addEventListener('click', (e)=>{ e.preventDefault(); finishGame(); });
 
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
+    finishing = false;
     hide(outEl);
     outEl.textContent = '';
     listEl.textContent = 'Loading...';
