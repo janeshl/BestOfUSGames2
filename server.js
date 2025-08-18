@@ -20,7 +20,7 @@ app.use("/api/", rateLimit({ windowMs: 60 * 1000, max: 30 }));
 // In-memory store (simple demo)
 const sessions = new Map();
 const recentByTopic = new Map();        // Character game: avoid repeats
-const recentQuizByTopic = new Map();    // Quiz game: avoid repeat questions
+const recentQuizByTopic = new Map();    // Quiz game: store ONLY last round (5 qns) per topic
 const makeId = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10);
 
 /* ------------------------
@@ -32,7 +32,7 @@ const PROMPTS = {
     {
       role: "system",
       content:
-        "You are a funny fortune teller. Create Funny, playful, positive predictions in 2-3 sentences. Use the inputs naturally. Keep it light; no health, death, or lottery claims.",
+        "You are a funny fortune teller. Create playful, positive predictions in 2-3 sentences. Use the inputs naturally. Keep it light; no health, death, or lottery claims.",
     },
     {
       role: "user",
@@ -65,7 +65,7 @@ No other text.`,
     { role: "user", content: `Topic: ${topic}. JSON only.` },
   ],
 
-  // Multi-hints after round 7
+  // Multi-hints after round 7 (server will throttle to one per round)
   characterTurn: ({ name, qa, round, text }) => [
     {
       role: "system",
@@ -172,7 +172,7 @@ JSON only.`,
     },
   ],
 
-  // Glam Builder (add optional tags)
+  // Glam Builder (adds optional tags)
   glamSuggest: ({ gender, budgetInr }) => [
     {
       role: "system",
@@ -269,24 +269,31 @@ app.post("/api/predict-future", async (req, res) => {
 });
 
 /* ========================
-   Game 2: 5-Round Quiz (resilient + no repeats + sanitized)
+   Game 2: 5-Round Quiz (exclude only last round per topic)
 ======================== */
 app.post("/api/quiz/start", async (req, res) => {
   try {
     const { topic = "General" } = req.body ?? {};
+
     const fixQuestion = (q, i) => {
       const question = String(q?.question || `Question ${i + 1} about ${topic}?`).trim();
       const optionsIn = Array.isArray(q?.options) ? q.options : [];
-      const options = optionsIn.slice(0, 4).map(o => String(o ?? ""))
-        .concat(Array(Math.max(0, 4 - optionsIn.length)).fill(0).map((_, k) => `Option ${["A","B","C","D"][optionsIn.length + k]}`))
+      const options = optionsIn
+        .slice(0, 4)
+        .map((o) => String(o ?? ""))
+        .concat(
+          Array(Math.max(0, 4 - optionsIn.length))
+            .fill(0)
+            .map((_, k) => `Option ${["A", "B", "C", "D"][optionsIn.length + k]}`)
+        )
         .slice(0, 4);
       let answerIndex = Number(q?.answerIndex);
-      if (![1,2,3,4].includes(answerIndex)) answerIndex = 1;
+      if (![1, 2, 3, 4].includes(answerIndex)) answerIndex = 1;
       const explanation = String(q?.explanation || "Keep learning!").trim();
       return { question, options, answerIndex, explanation };
     };
 
-    // Try model; fallback to local questions if anything goes wrong
+    // Call model
     let modelQs = [];
     try {
       const raw = await chatCompletion(PROMPTS.quiz(topic), 0.5, 900);
@@ -296,6 +303,7 @@ app.post("/api/quiz/start", async (req, res) => {
       console.warn("Quiz: model/unparseable JSON, falling back:", e?.message);
     }
 
+    // Fallback if needed
     if (!modelQs.length) {
       modelQs = [
         { question: `Which of these relates most to ${topic}?`, options: ["A", "B", "C", "D"], answerIndex: 1, explanation: "Topic warm-up." },
@@ -308,25 +316,36 @@ app.post("/api/quiz/start", async (req, res) => {
 
     const cleaned = modelQs.map(fixQuestion);
 
-    // No repeats per topic (by question text)
-    const prevSet = new Set((recentQuizByTopic.get(topic) || []).map(q => q.toLowerCase()));
-    const fresh = cleaned.filter(q => q?.question && !prevSet.has(q.question.toLowerCase()));
+    // Exclude ONLY the last round's questions (up to 5)
+    const lastRound = (recentQuizByTopic.get(topic) || []).slice(-5);
+    const excludeSet = new Set(lastRound.map((q) => q.toLowerCase()));
+    let fresh = cleaned.filter((q) => q?.question && !excludeSet.has(q.question.toLowerCase()));
 
-    // Ensure 5 Qs (pad if needed)
+    // If everything filtered, soften exclusion (allow reuse except the first 2 of last round)
+    if (fresh.length < 5) {
+      const softerExclude = new Set(lastRound.slice(0, 2).map((q) => q.toLowerCase()));
+      fresh = cleaned.filter((q) => q?.question && !softerExclude.has(q.question.toLowerCase()));
+    }
+
+    // Ensure 5
     const questions = fresh.slice(0, 5);
     while (questions.length < 5) {
       const i = questions.length + 1;
-      questions.push(fixQuestion({
-        question: `Placeholder Q${i} about ${topic}?`,
-        options: ["Option A", "Option B", "Option C", "Option D"],
-        answerIndex: 1,
-        explanation: "Regenerate with a more specific topic for better items."
-      }, i - 1));
+      questions.push(
+        fixQuestion(
+          {
+            question: `Placeholder Q${i} about ${topic}?`,
+            options: ["Option A", "Option B", "Option C", "Option D"],
+            answerIndex: 1,
+            explanation: "Regenerate with a more specific topic for better items.",
+          },
+          i - 1
+        )
+      );
     }
 
-    // Remember last 25 for de-dupe
-    const updated = [...(recentQuizByTopic.get(topic) || []), ...questions.map(q => q.question)].slice(-25);
-    recentQuizByTopic.set(topic, updated);
+    // Store ONLY these 5 as last round for the topic
+    recentQuizByTopic.set(topic, questions.map((q) => q.question));
 
     // Create session & return first Q
     const token = "QZ" + Math.random().toString(36).slice(2, 10).toUpperCase();
@@ -338,7 +357,7 @@ app.post("/api/quiz/start", async (req, res) => {
       idx: 1,
       total: 5,
       question: questions[0].question,
-      options: questions[0].options
+      options: questions[0].options,
     });
   } catch (e) {
     console.error("Quiz start failed:", e);
@@ -395,17 +414,17 @@ app.get("/api/quiz/ping", (_req, res) => {
     idx: 1,
     total: 5,
     question: "Ping question — does the UI render this?",
-    options: ["A", "B", "C", "D"]
+    options: ["A", "B", "C", "D"],
   });
 });
 
 /* ========================
-   Game 3: Conversational Character (hard + multi-hints)
+   Game 3: Conversational Character (hard + single hint per round 8/9/10)
 ======================== */
 app.post("/api/character/start", async (req, res) => {
   try {
     const { topic = "General" } = req.body ?? {};
-    const exclude = (recentByTopic.get(topic) || []);
+    const exclude = recentByTopic.get(topic) || [];
     const chooseMessages = PROMPTS.characterCandidates(topic, exclude);
 
     let candidates = ["Ada Lovelace", "Miyamoto Musashi", "Hedy Lamarr", "Sisyphus", "Alan Turing"];
@@ -415,9 +434,11 @@ app.post("/api/character/start", async (req, res) => {
       if (Array.isArray(parsed.candidates) && parsed.candidates.length) candidates = parsed.candidates;
     } catch {}
 
+    // pick first not in recent list
     const lowerRecent = exclude.map((x) => x.toLowerCase());
     const name = candidates.find((c) => !lowerRecent.includes(String(c).toLowerCase())) || candidates[0];
 
+    // update recent (keep last 5)
     recentByTopic.set(topic, [name, ...exclude].slice(0, 5));
 
     const id = makeId();
@@ -450,6 +471,7 @@ app.post("/api/character/turn", async (req, res) => {
     s.rounds += 1;
     s.history.push({ q: text || "", a: parsed.answer || "" });
 
+    // correct guess
     if (parsed.isGuess && parsed.guessedName) {
       const correct = parsed.guessedName.trim().toLowerCase() === s.name.trim().toLowerCase();
       if (correct) {
@@ -460,12 +482,13 @@ app.post("/api/character/turn", async (req, res) => {
           win: true,
           name: s.name,
           answer: parsed.answer,
-          hints: Array.isArray(parsed.hints) ? parsed.hints : [],
+          hints: [],
           message: `🎉 Brilliant! You figured it out — ${s.name}!`,
         });
       }
     }
 
+    // out of rounds
     if (s.rounds >= 10) {
       const reveal = `Out of rounds! The character was: ${s.name}.`;
       sessions.delete(sessionId);
@@ -475,17 +498,24 @@ app.post("/api/character/turn", async (req, res) => {
         win: false,
         name: s.name,
         answer: parsed.answer,
-        hints: Array.isArray(parsed.hints) ? parsed.hints : [],
+        hints: [],
         message: reveal,
       });
     }
 
-    const provideHints = s.rounds >= 8 && Array.isArray(parsed.hints) && parsed.hints.length;
+    // Exactly one hint on rounds 8, 9, 10
+    let hintOut = [];
+    if (s.rounds >= 8 && Array.isArray(parsed.hints) && parsed.hints.length) {
+      const idx = Math.min(2, s.rounds - 8); // 8->0, 9->1, 10->2
+      const one = parsed.hints[idx] || parsed.hints[0];
+      if (one) hintOut = [one];
+    }
+
     res.json({
       ok: true,
       done: false,
       answer: parsed.answer,
-      hints: provideHints ? parsed.hints : [],
+      hints: hintOut,
       roundsLeft: 10 - s.rounds,
     });
   } catch (e) {
