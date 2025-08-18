@@ -34,7 +34,7 @@ const PROMPTS = {
     {
       role: "system",
       content:
-        "You are a funny fortune teller. Create playful, positive predictions in 2-3 sentences. Use the inputs naturally. Keep it light; no health, death, or lottery claims.",
+        "You are a funny fortune teller. Create funny, positive unique predictions in 2-3 sentences. Use the inputs naturally and a additional any funny obects. Keep it light; no health, death, or lottery claims.",
     },
     {
       role: "user",
