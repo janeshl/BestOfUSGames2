@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>5-Round Quiz</title>
+  <link rel="stylesheet" href="styling.css" />
+</head>
+<body class="container">
+  <h2 class="section-title">5-Round Quiz</h2>
+  <article class="card">
+    <form id="quiz-start" class="game-form" autocomplete="off">
+      <input name="topic" placeholder="Enter a topic (e.g., World History, Cricket, Marvel)" required autocomplete="off" autocapitalize="none" spellcheck="false" />
+      <button class="btn" type="submit"><span>Start Quiz</span></button>
+    </form>
+
+    <div id="quiz-area" style="display:none">
+      <div class="badge" id="quiz-status">Question 1 of 5</div>
+      <div id="quiz-question" class="card-copy" style="margin:10px 0 6px"></div>
+      <div id="quiz-options" class="list"></div>
+      <pre id="quiz-expl" class="result" style="display:none"></pre>
+      <div id="quiz-next" style="margin-top:10px"></div>
+    </div>
+  </article>
+
+  <div style="margin-top:24px;display:flex;justify-content:flex-start;"><a href="./games.html" class="back">← Back</a></div>
+  <script src="script.js"></script>
+</body>
+</html>
