@@ -27,7 +27,7 @@ const PROMPTS = {
     { role: "user", content: `Make a humorous future prediction for:\nName: ${name}\nBirth month: ${birthMonth}\nFavorite place: ${favoritePlace}` }
   ],
   quiz: (topic) => [
-    { role: "system", content: "Create a 5-question multiple-choice quiz for the given topic. For EACH question, provide exactly 4 options and indicate the correct option index. Return STRICT JSON with shape: { questions: [ { question: string, options: string[4], answerIndex: 1|2|3|4, explanation: string } x5 ] }. Keep questions clear, fair, and varied difficulty. Do NOT include any extra text." },
+    { role: "system", content: "Create a 5-question Hard multiple-choice quiz for the given topic. For EACH question, provide exactly 4 options and indicate the correct option index. Return STRICT JSON with shape: { questions: [ { question: string, options: string[4], answerIndex: 1|2|3|4, explanation: string } x5 ] }. Keep questions clear, fair, and varied difficulty. Do NOT include any extra text." },
     { role: "user", content: `Topic: ${topic}. Return JSON only.` }
   ],
   characterCandidates: (topic) => [
@@ -43,7 +43,7 @@ Return strict JSON with keys:
 - isGuess: boolean
 - guessedName: string
 - hint: string (empty if no hint this turn)
-If current round is >= 7, include a helpful hint that makes the game easier but does not reveal the name.
+If current round is >= 7, include a helpful different hints that makes the game easier but does not reveal the name.
 Do NOT include extra text.` },
     { role: "user", content: `Previous Q&A:\n${qa}\nCurrent Round: ${round}\nUser message: ${text}` }
   ]
