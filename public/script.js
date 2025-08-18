@@ -26,7 +26,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   5-Round Quiz with 20s timer, win/lose message
+   5-Round Quiz (unchanged)
 ======================== */
 (function(){
   const startForm = document.querySelector('#quiz-start');
@@ -41,9 +41,9 @@ function html(e,m){if(e)e.innerHTML=m}
   const nextEl = document.querySelector('#quiz-next');
 
   let token = null;
-  let lock = false;           // prevents double answers
-  let tHandle = null;         // interval handle
-  let timeLeft = 20;          // seconds per question
+  let lock = false;
+  let tHandle = null;
+  let timeLeft = 20;
 
   function clearTimer(){
     if(tHandle){ clearInterval(tHandle); tHandle = null; }
@@ -57,14 +57,13 @@ function html(e,m){if(e)e.innerHTML=m}
       timerEl.textContent = `⏱ ${timeLeft}s`;
       if(timeLeft <= 0){
         clearTimer();
-        if(!lock) onExpire(); // auto-mark wrong
+        if(!lock) onExpire();
       }
     }, 1000);
   }
 
   async function submitAnswer(choiceIndex, clickedEl){
     if(lock) return; lock = true;
-    // stop inputs
     Array.from(optsEl.children).forEach(n => n.style.pointerEvents='none');
     clearTimer();
 
@@ -80,11 +79,9 @@ function html(e,m){if(e)e.innerHTML=m}
         lock = false; return;
       }
 
-      // show correctness styling if we had a clicked option
       if(clickedEl){
         clickedEl.style.borderColor = json.correct ? 'rgba(51,200,120,.8)' : 'rgba(255,80,80,.8)';
       } else {
-        // timeout path: lightly indicate timeout
         nextEl.innerHTML = '<div class="pill">⏳ Time up — counted as wrong.</div>';
       }
 
@@ -100,10 +97,9 @@ function html(e,m){if(e)e.innerHTML=m}
           ? `🎉 Winner! You scored ${json.score}/${json.total}`
           : `❌ Try again. You scored ${json.score}/${json.total}`);
         nextEl.innerHTML = '<div class="pill">'+msg+'</div>';
-        return; // end
+        return;
       }
 
-      // prepare Next button (immediate move or click-to-advance)
       nextEl.innerHTML = '';
       const b = document.createElement('button');
       b.className = 'btn'; b.textContent = 'Next';
@@ -130,20 +126,17 @@ function html(e,m){if(e)e.innerHTML=m}
     nextEl.innerHTML = '';
     lock = false;
 
-    // Build options
     (options || []).forEach((opt, i) => {
       const d = document.createElement('div');
       d.className = 'option';
       d.textContent = (i+1) + '. ' + opt;
-      d.onclick = () => submitAnswer(i+1, d);  // user click path
+      d.onclick = () => submitAnswer(i+1, d);
       optsEl.appendChild(d);
     });
 
-    // Start the 20s timer; on expire, submit choice 0 (always wrong)
     startTimer(() => submitAnswer(0, null));
   }
 
-  // Start quiz
   startForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const topic = e.target.topic.value.trim();
@@ -166,7 +159,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Find the Character — show ONE hint at rounds 8, 9, 10
+   Find the Character (unchanged behavior)
 ======================== */
 (function(){
   const startForm = $('#start-form');
@@ -216,8 +209,6 @@ function html(e,m){if(e)e.innerHTML=m}
         if(!json.ok){ pushMsg('AI', 'Error: ' + (json.error || 'Unknown error')); return; }
 
         if(json.answer){ pushMsg('AI', json.answer); }
-
-        // Exactly one hint per round (server sends at most one from rounds 8–10)
         if(Array.isArray(json.hints) && json.hints.length){
           pushMsg('AI', '💡 Hint: ' + json.hints[0]);
         }
@@ -241,7 +232,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Healthy Diet (defensive: works with 8 or 10 inputs; 2 rounds)
+   Healthy Diet (unchanged API, supports 10 Q)
 ======================== */
 (function(){
   const card = document.getElementById('hd-card');
@@ -271,12 +262,10 @@ function html(e,m){if(e)e.innerHTML=m}
       token = json.token;
       questions = Array.isArray(json.questions) ? json.questions.slice(0, totalSlots || 10) : [];
 
-      // Fill round 1 labels
       for(let i=0;i<r1Inputs.length;i++){
         const qEl = document.getElementById('hd-q'+(i+1));
         if(qEl) qEl.textContent = questions[i] || ('Question '+(i+1));
       }
-      // Fill round 2 labels
       for(let i=0;i<r2Inputs.length;i++){
         const qEl = document.getElementById('hd-q'+(i+1+r1Inputs.length));
         if(qEl) qEl.textContent = questions[i+r1Inputs.length] || ('Question '+(i+1+r1Inputs.length));
@@ -325,10 +314,9 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Budget Glam Builder — fixes:
-   - Keep start form hidden after start & after finish
-   - Prevent selecting beyond budget
-   - Robust Finish Now -> Results view
+   Budget Glam Builder — 3-step flow
+   1) Play -> 2) Review -> 3) Generate Results
+   + Over-budget block, timer, paging
 ======================== */
 (function(){
   const form = document.querySelector('#glam-start');
@@ -340,7 +328,6 @@ function html(e,m){if(e)e.innerHTML=m}
   const spendEl    = document.querySelector('#glam-spend');
   const countEl    = document.querySelector('#glam-count');
   const pageEl     = document.querySelector('#glam-page');
-
   const toastEl    = document.querySelector('#glam-toast');
 
   const listEl     = document.querySelector('#glam-list');
@@ -351,7 +338,15 @@ function html(e,m){if(e)e.innerHTML=m}
   const actionsRow = document.querySelector('#glam-actions');
   const finishBtn  = document.querySelector('#glam-finish');
 
-  const outEl      = document.querySelector('#glam-out');
+  // New: Review + Results sections
+  const reviewSec   = document.querySelector('#glam-review');
+  const reviewMeta  = document.querySelector('#glam-review-meta');
+  const reviewList  = document.querySelector('#glam-review-list');
+  const generateBtn = document.querySelector('#glam-generate');
+
+  const resultsSec  = document.querySelector('#glam-results');
+  const outEl       = document.querySelector('#glam-out');
+  const detailList  = document.querySelector('#glam-detail');
 
   let token = null;
   let items = [];
@@ -383,7 +378,7 @@ function html(e,m){if(e)e.innerHTML=m}
       timeLeft -= 1;
       if (timeLeft < 0) timeLeft = 0;
       timerEl.textContent = `Time: ${timeLeft}s`;
-      if(timeLeft <= 0){ clearTimer(); finishGame(); }
+      if(timeLeft <= 0){ clearTimer(); goToReview(); }
     }, 1000);
   }
 
@@ -421,24 +416,21 @@ function html(e,m){if(e)e.innerHTML=m}
       div.style.background = selected.has(i) ? 'rgba(80,200,120,.2)' : '';
 
       div.onclick = ()=>{
-        if(finishing) return; // prevent changes while finishing
+        if(finishing) return;
 
         if(selected.has(i)){
-          // remove selection
           selected.delete(i);
           div.style.background = '';
           updateHUD();
           return;
         }
 
-        // try add — block if budget would be exceeded
         const prospective = currentSpend() + (Number(p.price)||0);
         if(prospective > budgetInr){
           showToast(`🚫 Over budget: selecting this would cost ₹${prospective} (> ₹${budgetInr})`);
           return;
         }
 
-        // add selection
         selected.add(i);
         div.style.background = 'rgba(80,200,120,.2)';
         updateHUD();
@@ -453,41 +445,40 @@ function html(e,m){if(e)e.innerHTML=m}
     updateHUD();
   }
 
-  function renderResults(json){
-    // Hide gameplay UI and keep start form hidden (so it doesn't look like we "went back")
-    form.style.display = 'none';
-    hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
-    outEl.style.display = 'block';
-
-    const pos = Array.isArray(json.positives) ? json.positives.slice(0,6) : [];
-    const neg = Array.isArray(json.negatives) ? json.negatives.slice(0,6) : [];
-
-    const lines = [];
-    lines.push(json.win ? '🎉 Great build!' : '❌ Try again.');
-    lines.push(`Score: ${json.score}/100`);
-    if(json.summary) lines.push(json.summary);
-    lines.push(`Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`);
-    if(pos.length){
-      lines.push('\n👍 Positives:');
-      pos.forEach((p,i)=>lines.push(`  ${i+1}. ${p}`));
+  // Step 2: Review (no server call yet)
+  function goToReview(){
+    if(selected.size < 12){
+      showToast('Please pick at least 12 products before finishing.');
+      return;
     }
-    if(neg.length){
-      lines.push('\n⚠️ Areas to improve:');
-      neg.forEach((n,i)=>lines.push(`  ${i+1}. ${n}`));
-    }
-    outEl.textContent = lines.join('\n');
-  }
-
-  async function finishGame(){
-    if(finishing) return;
     finishing = true;
     clearTimer();
 
-    // keep start form hidden (prevents "return" feel)
-    form.style.display = 'none';
+    // Hide gameplay UI
+    hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
 
-    outEl.style.display = 'block';
+    // Build review list
+    reviewList.innerHTML = '';
+    const spend = currentSpend();
+    reviewMeta.textContent = `You selected ${selected.size} items, Spend: ₹${spend} / Budget: ₹${budgetInr} | Time: ${180 - Math.max(0,timeLeft)}s`;
+    Array.from(selected).forEach(idx => {
+      const p = items[idx];
+      const d = document.createElement('div');
+      d.className = 'option';
+      const tags = [...(p.tags||[]), p.category].filter(Boolean).slice(0,4).join(' · ');
+      d.textContent = `${p.name} — ₹${p.price}${tags ? ` [${tags}]` : ''}\n${p.description || ''}`;
+      d.style.whiteSpace = 'pre-wrap';
+      reviewList.appendChild(d);
+    });
+
+    show(reviewSec);
+  }
+
+  // Step 3: Generate Results (server scoring)
+  async function generateResults(){
     outEl.textContent = 'Scoring your kit...';
+    detailList.innerHTML = '';
+    show(resultsSec);
 
     try{
       const res = await fetch('/api/glam/score', {
@@ -502,31 +493,82 @@ function html(e,m){if(e)e.innerHTML=m}
       const json = await res.json();
       if(!json.ok){
         outEl.textContent = 'Error: ' + (json.error || 'Unknown error');
-        finishing = false;
         return;
       }
-      renderResults(json); // ✅ navigate to results view
+
+      // Summary block
+      const pos = Array.isArray(json.positives) ? json.positives.slice(0,6) : [];
+      const neg = Array.isArray(json.negatives) ? json.negatives.slice(0,6) : [];
+      const lines = [];
+      lines.push(json.win ? '🎉 Great build!' : '❌ Try again.');
+      lines.push(`Score: ${json.score}/100`);
+      if(json.summary) lines.push(json.summary);
+      lines.push(`Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`);
+      if(pos.length){
+        lines.push('\n👍 Positives:');
+        pos.forEach((p,i)=>lines.push(`  ${i+1}. ${p}`));
+      }
+      if(neg.length){
+        lines.push('\n⚠️ Areas to improve:');
+        neg.forEach((n,i)=>lines.push(`  ${i+1}. ${n}`));
+      }
+
+      // Contextual skin protection tip
+      const selItems = Array.from(selected).map(i=>items[i]);
+      const hasSPF = selItems.some(p => {
+        const text = `${p.name} ${p.category} ${(p.tags||[]).join(' ')}`.toLowerCase();
+        return text.includes('spf') || text.includes('sunscreen') || (p.category||'').toLowerCase()==='sunscreen';
+      });
+      const tip = hasSPF
+        ? "🧴 Tip: Reapply sunscreen every 2–3 hours, even indoors near windows."
+        : "🧴 Tip: Add a broad-spectrum SPF 30+ sunscreen for daily protection.";
+
+      lines.push('\n' + tip);
+      outEl.textContent = lines.join('\n');
+
+      // Two-sentence blurb per product
+      detailList.innerHTML = '';
+      selItems.forEach((p, i) => {
+        const div = document.createElement('div');
+        div.className = 'option';
+        const tags = [...(p.tags||[]), p.category].filter(Boolean).slice(0,4);
+        const tagTxt = tags.length ? ` [${tags.join(' · ')}]` : '';
+        // Sentence 1: structured info
+        const s1 = `${p.name}${tagTxt} — ₹${p.price}.`;
+        // Sentence 2: from description/tags
+        const s2 = (p.description && p.description.trim().length)
+          ? `${p.description.trim().replace(/\.*$/, '')}.`
+          : `Useful addition to round out your routine.`;
+        div.textContent = `${s1} ${s2}`;
+        detailList.appendChild(div);
+      });
+
+      // Move focus to results
+      reviewSec.classList.add('hidden');
+      resultsSec.classList.remove('hidden');
     }catch{
       outEl.textContent = 'Network error.';
-      finishing = false;
     }
   }
 
   prevBtn.addEventListener('click', ()=>{ if(page>0 && !finishing){ page--; renderPage(); } });
   nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length && !finishing){ page++; renderPage(); } });
-  finishBtn.addEventListener('click', (e)=>{ e.preventDefault(); finishGame(); });
+  finishBtn.addEventListener('click', (e)=>{ e.preventDefault(); goToReview(); });
+  generateBtn.addEventListener('click', (e)=>{ e.preventDefault(); generateResults(); });
 
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
     finishing = false;
-    hide(outEl);
-    outEl.textContent = '';
+
+    // Reset screens
+    hide(reviewSec); hide(resultsSec);
+    outEl.textContent = ''; detailList.innerHTML = '';
     listEl.textContent = 'Loading...';
 
     const gender = form.gender.value;
     const budget = Number(form.budget.value);
 
-    // Hide the start form once the game begins to avoid the "jump back" impression
+    // Hide start form once game begins
     form.style.display = 'none';
 
     try{
@@ -538,7 +580,6 @@ function html(e,m){if(e)e.innerHTML=m}
       const json = await res.json();
       if(!json.ok){
         listEl.textContent = 'Error: ' + (json.error || 'Unknown error');
-        // Show form back if start failed
         form.style.display = '';
         return;
       }
@@ -549,12 +590,16 @@ function html(e,m){if(e)e.innerHTML=m}
       selected.clear();
       page = 0;
 
-      show(hud); show(listEl); show(pagerRow); show(actionsRow);
+      // Show gameplay UI
+      hud.classList.remove('hidden');
+      listEl.classList.remove('hidden');
+      pagerRow.classList.remove('hidden');
+      actionsRow.classList.remove('hidden');
+
       renderPage();
       startTimer();
     }catch{
       listEl.textContent = 'Network error';
-      // Show form back if start failed
       form.style.display = '';
     }
   });
