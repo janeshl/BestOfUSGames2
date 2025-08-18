@@ -24,7 +24,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Game 2: 5-Round Quiz (20s timer, resilient errors, win if >=4)
+   Game 2: 5-Round Quiz (20s timer, win if >=4, exclude only last round per topic)
 ======================== */
 (function(){
   const startForm = document.querySelector('#quiz-start');
@@ -137,7 +137,7 @@ function html(e,m){if(e)e.innerHTML=m}
       optsEl.appendChild(d);
     });
 
-    startTimer(() => submitAnswer(0, null)); // timeout path
+    startTimer(() => submitAnswer(0, null));
   }
 
   startForm.addEventListener('submit', async (e) => {
@@ -167,7 +167,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Game 3: Find the Character (hard level & multi-hints)
+   Game 3: Find the Character — ONE hint at rounds 8,9,10
 ======================== */
 (function(){
   const startForm = $('#start-form');
@@ -198,7 +198,7 @@ function html(e,m){if(e)e.innerHTML=m}
       roundsLeft = 10;
       $('#game').style.display = 'block';
       html(chat, '');
-      pushMsg('AI', json.message || 'Ask your first yes/no question!');
+      pushMsg('AI', json.message || 'Ask your first question!');
       setText(rounds, 'Rounds left: ' + roundsLeft);
     }catch{ html(chat, 'Network error. Please try again.'); }
   });
@@ -218,9 +218,9 @@ function html(e,m){if(e)e.innerHTML=m}
 
         if(json.answer){ pushMsg('AI', json.answer); }
 
-        // Show multiple hints after round 7
+        // Show exactly one hint (if provided)
         if(Array.isArray(json.hints) && json.hints.length){
-          json.hints.forEach((h)=> pushMsg('AI', '💡 Hint: ' + h));
+          pushMsg('AI', '💡 Hint: ' + json.hints[0]);
         }
 
         if(json.done){
@@ -269,7 +269,6 @@ function html(e,m){if(e)e.innerHTML=m}
       token = json.token;
       questions = json.questions || [];
 
-      // Fill labels (10)
       for(let i=1;i<=10;i++){
         const el = document.getElementById('hd-q'+i);
         if(el) el.textContent = questions[i-1] || ('Question '+i);
@@ -445,7 +444,7 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Game 6: Budget Glam Builder — show name, price, description, tags
+   Game 6: Budget Glam Builder — products w/ tags; Finish Now -> results page
 ======================== */
 (function(){
   const form = document.querySelector('#glam-start');
@@ -510,7 +509,6 @@ function html(e,m){if(e)e.innerHTML=m}
       const p = items[i];
       const div = document.createElement('div');
       div.className = 'option';
-      // Tags: category + eco flag; allow extra tags if present
       const tagsArr = Array.isArray(p.tags) ? p.tags : [];
       const ecoTag = p.ecoFriendly ? 'Eco-Friendly' : null;
       const baseTags = [p.category || null, ecoTag].filter(Boolean);
@@ -521,13 +519,11 @@ function html(e,m){if(e)e.innerHTML=m}
       div.style.whiteSpace = 'pre-wrap';
       div.style.cursor = 'pointer';
 
-      if(selected.has(i)) div.classList.add('selected');
       if(selected.has(i)) div.style.background = 'rgba(80,200,120,.2)'; else div.style.background = '';
 
       div.onclick = ()=>{
         if(selected.has(i)) selected.delete(i); else selected.add(i);
-        if(selected.has(i)) { div.classList.add('selected'); div.style.background = 'rgba(80,200,120,.2)'; }
-        else { div.classList.remove('selected'); div.style.background = ''; }
+        div.style.background = selected.has(i) ? 'rgba(80,200,120,.2)' : '';
         updateHUD();
       };
 
@@ -538,6 +534,29 @@ function html(e,m){if(e)e.innerHTML=m}
     nextBtn.disabled = end >= items.length;
 
     updateHUD();
+  }
+
+  function renderResults(json){
+    hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
+    outEl.style.display = 'block';
+
+    const pos = Array.isArray(json.positives) ? json.positives.slice(0,6) : [];
+    const neg = Array.isArray(json.negatives) ? json.negatives.slice(0,6) : [];
+
+    const lines = [];
+    lines.push(json.win ? '🎉 Great build!' : '❌ Try again.');
+    lines.push(`Score: ${json.score}/100`);
+    if(json.summary) lines.push(json.summary);
+    lines.push(`Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`);
+    if(pos.length){
+      lines.push('\n👍 Positives:');
+      pos.forEach((p,i)=>lines.push(`  ${i+1}. ${p}`));
+    }
+    if(neg.length){
+      lines.push('\n⚠️ Areas to improve:');
+      neg.forEach((n,i)=>lines.push(`  ${i+1}. ${n}`));
+    }
+    outEl.textContent = lines.join('\n');
   }
 
   async function finishGame(){
@@ -560,10 +579,7 @@ function html(e,m){if(e)e.innerHTML=m}
         outEl.textContent = 'Error: ' + (json.error || 'Unknown error');
         return;
       }
-      outEl.textContent = (json.win ? '🎉 Congrats! ' : '❌ ') +
-        `Score: ${json.score}/100\n` +
-        (json.summary ? `${json.summary}\n` : '') +
-        `Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`;
+      renderResults(json);
     }catch{
       outEl.textContent = 'Network error.';
     }
@@ -600,11 +616,7 @@ function html(e,m){if(e)e.innerHTML=m}
       selected.clear();
       page = 0;
 
-      show(hud);
-      show(listEl);
-      show(pagerRow);
-      show(actionsRow);
-
+      show(hud); show(listEl); show(pagerRow); show(actionsRow);
       renderPage();
       startTimer();
     }catch{
