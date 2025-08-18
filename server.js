@@ -1,4 +1,4 @@
-import express from "express";
+import express from "express"; 
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
 import { customAlphabet } from "nanoid";
@@ -19,7 +19,8 @@ app.use("/api/", rateLimit({ windowMs: 60 * 1000, max: 30 }));
 
 // In-memory store (simple demo)
 const sessions = new Map();
-const recentByTopic = new Map();
+const recentByTopic = new Map();        // for Character game (avoid repeats)
+const recentQuizByTopic = new Map();    // for Quiz game (avoid repeat questions)
 const makeId = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10);
 
 /* ------------------------
@@ -47,34 +48,38 @@ Favorite place: ${favoritePlace}`,
     {
       role: "system",
       content:
-        "Create a 5 Hard level question multiple-choice quiz for the given topic. For EACH question, provide exactly 4 options and indicate the correct option index. Return STRICT JSON with shape: { questions: [ { question: string, options: string[4], answerIndex: 1|2|3|4, explanation: string } x5 ] }. Keep questions clear, fair, and varied difficulty. Do NOT include any extra text.",
+        "Create a 5 Hard level questions multiple-choice quiz for the given topic. For EACH question, provide exactly 4 options and indicate the correct option index. Return STRICT JSON with shape: { questions: [ { question: string, options: string[4], answerIndex: 1|2|3|4, explanation: string } x5 ] }. Keep questions clear, fair, and varied difficulty. Do NOT include any extra text.",
     },
     { role: "user", content: `Topic: ${topic}. Return JSON only.` },
   ],
 
-  // Game 3: Guess the Character
-  characterCandidates: (topic) => [
+  // Game 3: Guess the Character (hard)
+  characterCandidates: (topic, excludeList = []) => [
     {
       role: "system",
       content:
-        "Return STRICT JSON {candidates: string[]} of 5 well-known medium level difficulty to find out people or fictional characters related to the topic. No other text.",
+        `Return STRICT JSON {"candidates": string[]} of 5 **hard-level** people or fictional characters related to the topic. 
+Avoid these (case-insensitive): ${excludeList.join(", ") || "(none)"}.
+No other text.`,
     },
     { role: "user", content: `Topic: ${topic}. JSON only.` },
   ],
 
+  // Multi-hints after round 7
   characterTurn: ({ name, qa, round, text }) => [
     {
       role: "system",
       content: `You are running a 20-questions style game. The secret answer is "${name}".
 Respond to the user's message as a short yes/no style answer (<= 15 words), without revealing the name.
-Also determine if the user is explicitly making a guess of the character's name.
+Detect if the user is explicitly guessing the exact name.
+
 Return strict JSON with keys:
 - answer: string
 - isGuess: boolean
 - guessedName: string
-- hint: string (empty if no hint this turn)
-If current round is >= 8, include a helpful different hints that makes the game easier but does not reveal the name.
-Do NOT include extra text.`,
+- hints: string[]   // empty or multiple hints; if round >= 8 provide 2–3 progressively stronger hints without revealing
+
+No extra text.`,
     },
     {
       role: "user",
@@ -166,7 +171,9 @@ ${qa.map((a, i) => `Q${i + 1}: ${a.q}\nA${i + 1}: ${a.a ? "Yes" : "No"}`).join("
 JSON only.`,
     },
   ],
-       glamSuggest: ({ gender, budgetInr }) => [
+
+  // Glam Builder
+  glamSuggest: ({ gender, budgetInr }) => [
     {
       role: "system",
       content: `Suggest 30 skincare/beauty products appropriate for the specified gender (or unisex).
@@ -184,14 +191,14 @@ Return STRICT JSON:
     { "name": string, "price": number, "description": string, "category": string, "ecoFriendly": boolean }
     x30
   ]
-}`
+}`,
     },
     {
       role: "user",
       content: `Gender: ${gender || "Unisex"}
 BudgetINR: ${budgetInr}
-JSON only.`
-    }
+JSON only.`,
+    },
   ],
 
   glamScore: ({ budgetInr, selected, timeTaken }) => [
@@ -210,7 +217,7 @@ Output STRICT JSON:
   "positives": string[],
   "negatives": string[],
   "summary": string
-}`
+}`,
     },
     {
       role: "user",
@@ -218,12 +225,12 @@ Output STRICT JSON:
 TimeTakenSeconds: ${timeTaken}
 
 Selected Items (${selected.length}):
-${selected.map((it,i)=>`#${i+1} ${it.name} — ₹${it.price} — ${it.category} — eco:${it.ecoFriendly}`).join("\n")}
+${selected.map((it, i) => `#${i + 1} ${it.name} — ₹${it.price} — ${it.category} — eco:${it.ecoFriendly}`).join("\n")}
 
-TotalSpend: ₹${selected.reduce((s,x)=>s+Number(x.price||0),0)}
-JSON only.`
-    }
-  ]
+TotalSpend: ₹${selected.reduce((s, x) => s + Number(x.price || 0), 0)}
+JSON only.`,
+    },
+  ],
 };
 
 /* ------------------------
@@ -261,27 +268,43 @@ app.post("/api/predict-future", async (req, res) => {
 });
 
 /* ========================
-   Game 2: 5-Round Quiz
+   Game 2: 5-Round Quiz (no repeat questions per topic)
 ======================== */
 app.post("/api/quiz/start", async (req, res) => {
   try {
-    const { topic } = req.body ?? {};
+    const { topic = "General" } = req.body ?? {};
     const messages = PROMPTS.quiz(topic);
+
+    // Generate questions
     let parsed = { questions: [] };
     try {
       const raw = await chatCompletion(messages, 0.5, 900);
       parsed = JSON.parse(raw);
     } catch {}
-    const questions = Array.isArray(parsed.questions) ? parsed.questions.slice(0, 5) : [];
+
+    // De-duplicate against previous questions for this topic
+    const prevSet = new Set((recentQuizByTopic.get(topic) || []).map((q) => q.toLowerCase()));
+    const fresh = (Array.isArray(parsed.questions) ? parsed.questions : []).filter(
+      (q) => q?.question && !prevSet.has(String(q.question).toLowerCase())
+    );
+
+    // Ensure 5 questions
+    const questions = fresh.slice(0, 5);
     while (questions.length < 5) {
+      const i = questions.length + 1;
       questions.push({
-        question: `Placeholder Q${questions.length + 1} about ${topic}?`,
+        question: `Placeholder Q${i} about ${topic}?`,
         options: ["Option A", "Option B", "Option C", "Option D"],
         answerIndex: 1,
         explanation:
           "This is a placeholder. Regenerate with a clearer topic for a better quiz.",
       });
     }
+
+    // Update memory (store last 25 Qs per topic)
+    const updated = [...(recentQuizByTopic.get(topic) || []), ...questions.map((q) => q.question)].slice(-25);
+    recentQuizByTopic.set(topic, updated);
+
     const token = "QZ" + Math.random().toString(36).slice(2, 10).toUpperCase();
     sessions.set(token, {
       type: "quiz",
@@ -346,22 +369,29 @@ app.post("/api/quiz/answer", (req, res) => {
   }
 });
 
-/* Game 3: Conversational Character */
+/* ========================
+   Game 3: Conversational Character (hard + multi-hints)
+======================== */
 app.post("/api/character/start", async (req, res) => {
   try {
-    const { topic } = req.body ?? {};
-    const chooseMessages = PROMPTS.characterCandidates(topic);
-    let candidates = ["Albert Einstein", "Iron Man", "Taylor Swift", "Narendra Modi", "Sherlock Holmes"];
+    const { topic = "General" } = req.body ?? {};
+    const exclude = (recentByTopic.get(topic) || []);
+    const chooseMessages = PROMPTS.characterCandidates(topic, exclude);
+
+    let candidates = ["Ada Lovelace", "Miyamoto Musashi", "Hedy Lamarr", "Sisyphus", "Alan Turing"];
     try {
-      const raw = await chatCompletion(chooseMessages, 0.7, 120);
+      const raw = await chatCompletion(chooseMessages, 0.7, 160);
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.candidates) && parsed.candidates.length) candidates = parsed.candidates;
     } catch {}
-    const rec = recentByTopic.get(topic) || [];
-    let name =
-      candidates.find((c) => !rec.map((x) => x.toLowerCase()).includes(c.toLowerCase())) ||
-      candidates[0];
-    recentByTopic.set(topic, [name, ...rec].slice(0, 5));
+
+    // Pick first not in recent; else first
+    const lowerRecent = exclude.map((x) => x.toLowerCase());
+    const name = candidates.find((c) => !lowerRecent.includes(String(c).toLowerCase())) || candidates[0];
+
+    // Update recent (store last 5 per topic)
+    recentByTopic.set(topic, [name, ...exclude].slice(0, 5));
+
     const id = makeId();
     sessions.set(id, { type: "character", topic, name, rounds: 0, history: [], createdAt: Date.now() });
     res.json({
@@ -383,15 +413,16 @@ app.post("/api/character/turn", async (req, res) => {
     const qa = s.history.map((h, i) => `Q${i + 1}: ${h.q}\nA${i + 1}: ${h.a}`).join("\n");
     const messages = PROMPTS.characterTurn({ name: s.name, qa, round: s.rounds + 1, text });
 
-    let parsed = { answer: "Okay.", isGuess: false, guessedName: "", hint: "" };
+    let parsed = { answer: "Okay.", isGuess: false, guessedName: "", hints: [] };
     try {
-      const raw = await chatCompletion(messages, 0.4, 160);
+      const raw = await chatCompletion(messages, 0.4, 220);
       parsed = JSON.parse(raw);
     } catch {}
 
     s.rounds += 1;
     s.history.push({ q: text || "", a: parsed.answer || "" });
 
+    // Correct guess?
     if (parsed.isGuess && parsed.guessedName) {
       const correct = parsed.guessedName.trim().toLowerCase() === s.name.trim().toLowerCase();
       if (correct) {
@@ -402,11 +433,13 @@ app.post("/api/character/turn", async (req, res) => {
           win: true,
           name: s.name,
           answer: parsed.answer,
-          hint: parsed.hint || "",
+          hints: Array.isArray(parsed.hints) ? parsed.hints : [],
+          message: `🎉 Brilliant! You figured it out — ${s.name}!`,
         });
       }
     }
 
+    // Out of rounds?
     if (s.rounds >= 10) {
       const reveal = `Out of rounds! The character was: ${s.name}.`;
       sessions.delete(sessionId);
@@ -416,17 +449,17 @@ app.post("/api/character/turn", async (req, res) => {
         win: false,
         name: s.name,
         answer: parsed.answer,
-        hint: parsed.hint || "",
+        hints: Array.isArray(parsed.hints) ? parsed.hints : [],
         message: reveal,
       });
     }
 
-    const showHint = s.rounds >= 8 && (parsed.hint || "").trim().length;
+    const provideHints = s.rounds >= 8 && Array.isArray(parsed.hints) && parsed.hints.length;
     res.json({
       ok: true,
       done: false,
       answer: parsed.answer,
-      hint: showHint ? parsed.hint : "",
+      hints: provideHints ? parsed.hints : [],
       roundsLeft: 10 - s.rounds,
     });
   } catch (e) {
@@ -560,7 +593,6 @@ app.post("/api/fpp/answers", async (req, res) => {
     s.answers = answers.map((a) => !!a);
     const qa = s.questions.map((q, i) => ({ q, a: s.answers[i] }));
 
-    // Ask AI to forecast price (but do NOT return it here)
     let predicted = {
       predictedPrice: Math.max(1, s.currentPrice * 1.2),
       explanation: "Baseline estimate with modest growth.",
@@ -588,8 +620,41 @@ app.post("/api/fpp/answers", async (req, res) => {
     s.predictedPrice = Number(predicted.predictedPrice);
     s.explanation = predicted.explanation || "";
 
-    // Hide the AI price until the guess step
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ✅ Added endpoint to fix network error in front-end
+app.post("/api/fpp/guess", (req, res) => {
+  try {
+    const { token, guess } = req.body ?? {};
+    const s = sessions.get(token);
+    if (!s || s.type !== "fpp")
+      return res.status(400).json({ ok: false, error: "Session not found/expired." });
+    if (typeof s.predictedPrice !== "number" || !isFinite(s.predictedPrice)) {
+      return res.status(400).json({ ok: false, error: "Prediction not ready." });
+    }
+    const playerGuess = Number(guess);
+    if (!isFinite(playerGuess)) {
+      return res.status(400).json({ ok: false, error: "Invalid guess." });
+    }
+
+    const ai = s.predictedPrice;
+    const win = Math.abs(playerGuess - ai) <= 0.6 * ai; // within 60%
+    const payload = {
+      ok: true,
+      win,
+      currency: s.currency,
+      playerGuess,
+      aiPrice: ai,
+      explanation: s.explanation,
+      product: s.product,
+      currentPrice: s.currentPrice,
+    };
+    sessions.delete(token);
+    res.json(payload);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -597,8 +662,6 @@ app.post("/api/fpp/answers", async (req, res) => {
 
 /* ========================
    Game 6: Budget Glam Builder
-   - Start: min budget ₹10,000, 30 items
-   - Score: min selection 12, timer 180s
 ======================== */
 app.post("/api/glam/start", async (req, res) => {
   try {
