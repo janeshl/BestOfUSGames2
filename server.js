@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
@@ -13,121 +14,16 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 if (!GROQ_API_KEY) console.warn("⚠️  GROQ_API_KEY not set.");
 
+// Middleware
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static("public"));
 app.use("/api/", rateLimit({ windowMs: 60 * 1000, max: 30 }));
 
 // In-memory store (simple demo)
 const sessions = new Map();
-const recentByTopic = new Map();        // Character game: avoid repeats (names)
-const recentQuizByTopic = new Map();    // Quiz game: store ONLY last 5 question strings per topic
+const recentByTopic = new Map();        // Character game: avoid repeats per topic (last 5)
+const recentQuizByTopic = new Map();    // Quiz game: avoid repeating questions per topic (keep last 50 Qs)
 const makeId = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10);
-
-/* ------------------------
-   Helpers
-------------------------- */
-function prng(seed) {
-  // tiny deterministic PRNG for fallback quiz generation
-  let s = 0;
-  String(seed || "x").split("").forEach((c, i) => (s ^= (c.charCodeAt(0) + i) & 0xffff));
-  return () => {
-    s ^= s << 13; s ^= s >>> 17; s ^= s << 5;
-    return (s >>> 0) / 4294967296;
-  };
-}
-
-function shuffle(arr, rng) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor((rng ? rng() : Math.random()) * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function fallbackQuiz(topic, seed) {
-  const rng = prng(seed);
-  const banks = [
-    {
-      stem: `Which statement about ${topic} is MOST accurate?`,
-      opts: [
-        `A nuanced fact about ${topic} that is correct.`,
-        `A plausible but false claim about ${topic}.`,
-        `An outdated statement about ${topic}.`,
-        `A generic statement that doesn't apply to ${topic}.`,
-      ],
-      ans: 1,
-    },
-    {
-      stem: `In ${topic}, which option BEST reflects a hard concept?`,
-      opts: [
-        `The correct deep concept in ${topic}.`,
-        `A shallow heuristic.`,
-        `An unrelated principle.`,
-        `A misinterpretation.`,
-      ],
-      ans: 1,
-    },
-    {
-      stem: `Pick the TRUE detail regarding ${topic}.`,
-      opts: [
-        `The true advanced detail for ${topic}.`,
-        `A tempting misconception.`,
-        `A partial truth lacking key context.`,
-        `A generalization that fails in ${topic}.`,
-      ],
-      ans: 1,
-    },
-    {
-      stem: `${topic}: which scenario would MOST likely occur?`,
-      opts: [
-        `The realistic scenario based on ${topic} rules.`,
-        `An edge case misapplied to ${topic}.`,
-        `A contradictory scenario.`,
-        `An impossible case.`,
-      ],
-      ans: 1,
-    },
-    {
-      stem: `Choose the BEST practice for ${topic}.`,
-      opts: [
-        `The best hard-level practice in ${topic}.`,
-        `A common anti-pattern.`,
-        `An irrelevant best practice from elsewhere.`,
-        `A risky shortcut.`,
-      ],
-      ans: 1,
-    },
-    {
-      stem: `Which term is used precisely in ${topic}?`,
-      opts: [
-        `The precise term in ${topic}.`,
-        `A near-synonym used incorrectly.`,
-        `A different domain's term.`,
-        `A casual nickname.`,
-      ],
-      ans: 1,
-    },
-  ];
-
-  const picked = shuffle(banks, rng).slice(0, 5).map((b, i) => {
-    // Randomly shuffle options & keep answer index aligned
-    const idxs = [0,1,2,3];
-    const shuffledIdxs = shuffle(idxs, rng);
-    const options = shuffledIdxs.map(k => b.opts[k]);
-    const answerIndex = shuffledIdxs.indexOf(b.ans - 1) + 1;
-    // Add slight phrasing variety with seed sprinkle
-    const spice = ["(hard)", "(advanced)", "(expert)", "(tricky)", "(depth)"][Math.floor(rng()*5)];
-    return {
-      question: `${b.stem} ${spice}`,
-      options,
-      answerIndex,
-      explanation: `The first correct option captures the precise/most accurate choice for ${topic}.`,
-    };
-  });
-
-  return picked;
-}
 
 /* ------------------------
    Prompt templates
@@ -149,29 +45,27 @@ Favorite place: ${favoritePlace}`,
     },
   ],
 
-  // Game 2: 5-Round Quiz (hard questions) — now with hidden seed for variety
-  quiz: (topic, seed) => [
+  // Game 2: 5-Round Quiz (HARD)
+  quiz: (topic, bannedQuestions = []) => [
     {
       role: "system",
       content:
-        `Create a 5 Hard-level question multiple-choice quiz for the given topic.
-Use this hidden random seed to ensure different questions each time: "${seed}".
-
-For EACH question:
-- Provide exactly 4 options.
-- Indicate the correct option index (1–4).
-- Hard but fair.
-- NO repetition across runs given the seed.
-
-Return STRICT JSON with shape:
+        `Create a 5-question **hard** multiple-choice quiz for the topic.
+Rules:
+- EXACTLY 5 questions.
+- EACH question has EXACTLY 4 options.
+- Indicate the correct option index (1-4).
+- Avoid these questions (case-insensitive): ${bannedQuestions.join(" | ") || "(none)"}.
+- Return STRICT JSON ONLY with shape:
 {
   "questions": [
-    { "question": string, "options": string[4], "answerIndex": 1|2|3|4, "explanation": string } x5
+    { "question": string, "options": string[4], "answerIndex": 1|2|3|4, "explanation": string }
+    x5
   ]
 }
 No extra text.`,
     },
-    { role: "user", content: `Topic: ${topic}. Return JSON only.` },
+    { role: "user", content: `Topic: ${topic}. JSON only.` },
   ],
 
   // Game 3: Guess the Character (hard)
@@ -179,14 +73,14 @@ No extra text.`,
     {
       role: "system",
       content:
-        `Return STRICT JSON {"candidates": string[]} of 5 **hard-level** people or fictional characters related to the topic. 
+        `Return STRICT JSON {"candidates": string[]} of 5 **hard-level** people or fictional characters related to the topic.
 Avoid these (case-insensitive): ${excludeList.join(", ") || "(none)"}.
 No other text.`,
     },
     { role: "user", content: `Topic: ${topic}. JSON only.` },
   ],
 
-  // Multi-hints after round 7 (server will throttle to one per round)
+  // Multi-hints array (we'll show only one per round from 8–10)
   characterTurn: ({ name, qa, round, text }) => [
     {
       role: "system",
@@ -204,11 +98,14 @@ No extra text.`,
     },
     {
       role: "user",
-      content: `Previous Q&A:\n${qa}\nCurrent Round: ${round}\nUser message: ${text}`,
+      content: `Previous Q&A:
+${qa}
+Current Round: ${round}
+User message: ${text}`,
     },
   ],
 
-  // Game 4: Healthy Diet — generate 10 questions
+  // Game 4: Healthy Diet — 10 questions
   healthyQuestions: () => [
     {
       role: "system",
@@ -218,12 +115,12 @@ No extra text.`,
     { role: "user", content: "JSON only." },
   ],
 
-  // Game 4: Healthy Diet — build the plan from 10 answers
+  // Game 4: Healthy Diet — build the plan
   healthyPlan: ({ questions, answers }) => [
     {
       role: "system",
       content: `You are a careful nutrition assistant. Using the user's responses, create a practical, culturally-flexible, **food-based** diet plan.
-Safety rules: 
+Safety rules:
 - Do NOT give medical advice or diagnose; add a short non-medical disclaimer.
 - Avoid unsafe extremes; give ranges & substitutions for allergies/intolerances.
 - Focus on whole foods, hydration, and sustainable habits.
@@ -293,7 +190,7 @@ JSON only.`,
     },
   ],
 
-  // Glam Builder (adds optional tags)
+  // Game 6: Budget Glam Builder (with tags)
   glamSuggest: ({ gender, budgetInr }) => [
     {
       role: "system",
@@ -305,7 +202,6 @@ Rules:
 - Include both everyday basics and a few extras; avoid duplicate names.
 - Keep descriptions <= 15 words.
 - Mark ecoFriendly=true for recyclable/mineral-filter/clean-formulation/refill options.
-- Add up to 2 short tags per item (optional), like "fragrance-free", "refillable", "mineral SPF", "travel-size".
 
 Return STRICT JSON:
 {
@@ -390,102 +286,75 @@ app.post("/api/predict-future", async (req, res) => {
 });
 
 /* ========================
-   Game 2: 5-Round Quiz (exclude only last round per topic; seeded variety + fallback)
+   Game 2: 5-Round Quiz (hard, no-repeat per topic)
 ======================== */
 app.post("/api/quiz/start", async (req, res) => {
   try {
     const { topic = "General" } = req.body ?? {};
-    const seed = makeId(); // hidden seed ensures variety each play
 
-    const fixQuestion = (q, i) => {
-      const question = String(q?.question || `Question ${i + 1} about ${topic}?`).trim();
-      const optionsIn = Array.isArray(q?.options) ? q.options : [];
-      const options = optionsIn
-        .slice(0, 4)
-        .map((o) => String(o ?? ""))
-        .concat(
-          Array(Math.max(0, 4 - optionsIn.length))
-            .fill(0)
-            .map((_, k) => `Option ${["A", "B", "C", "D"][optionsIn.length + k]}`)
-        )
-        .slice(0, 4);
-      let answerIndex = Number(q?.answerIndex);
-      if (![1, 2, 3, 4].includes(answerIndex)) answerIndex = 1;
-      const explanation = String(q?.explanation || "Keep learning!").trim();
-      return { question, options, answerIndex, explanation };
-    };
+    // Build banlist from memory (lowercased)
+    const prevQs = recentQuizByTopic.get(topic) || [];
+    const bannedList = prevQs.map((q) => String(q).toLowerCase());
 
-    // 1) Ask model with a seed to force different questions
-    let modelQs = [];
+    // Ask model with banlist to diversify
+    const messages = PROMPTS.quiz(topic, bannedList.slice(-50));
+    let parsed = { questions: [] };
+
     try {
-      const raw = await chatCompletion(PROMPTS.quiz(topic, seed), 0.5, 900);
-      const parsed = JSON.parse(raw);
-      modelQs = Array.isArray(parsed?.questions) ? parsed.questions : [];
-    } catch (e) {
-      console.warn("Quiz: model/unparseable JSON, falling back:", e?.message);
+      const raw = await chatCompletion(messages, 0.5, 1100);
+      parsed = JSON.parse(raw);
+    } catch {
+      // ignore and fallback below
     }
 
-    // 2) If model fails, generate local hard-ish questions
-    if (!modelQs.length) {
-      modelQs = fallbackQuiz(topic, seed);
-    }
+    let questions = Array.isArray(parsed.questions) ? parsed.questions : [];
 
-    const cleaned = modelQs.map(fixQuestion);
+    // Filter out repeats (double protection)
+    const has = new Set(bannedList);
+    questions = questions.filter(
+      (q) => q?.question && !has.has(String(q.question).toLowerCase())
+    );
 
-    // 3) Exclude ONLY the last round's questions (up to 5)
-    const lastRound = (recentQuizByTopic.get(topic) || []).slice(-5);
-    const excludeSet = new Set(lastRound.map((q) => q.toLowerCase()));
-    let fresh = cleaned.filter((q) => q?.question && !excludeSet.has(q.question.toLowerCase()));
-
-    // 4) If everything filtered, soften exclusion (allow reuse except first 2 of last round)
-    if (fresh.length < 5) {
-      const softerExclude = new Set(lastRound.slice(0, 2).map((q) => q.toLowerCase()));
-      fresh = cleaned.filter((q) => q?.question && !softerExclude.has(q.question.toLowerCase()));
-    }
-
-    // 5) If still short, top up with local fallback that is guaranteed unique to the seed
-    if (fresh.length < 5) {
-      const need = 5 - fresh.length;
-      const topup = fallbackQuiz(`${topic}`, `${seed}-extra`).filter(
-        x => !excludeSet.has(x.question.toLowerCase())
-      ).slice(0, need);
-      fresh = [...fresh, ...topup];
-    }
-
-    // 6) Ensure 5
-    const questions = fresh.slice(0, 5);
+    // Fallback if the model returned too few fresh questions
     while (questions.length < 5) {
       const i = questions.length + 1;
-      questions.push(
-        fixQuestion(
-          {
-            question: `Placeholder Q${i} about ${topic}?`,
-            options: ["Option A", "Option B", "Option C", "Option D"],
-            answerIndex: 1,
-            explanation: "Regenerate with a more specific topic for better items.",
-          },
-          i - 1
-        )
-      );
+      questions.push({
+        question: `Challenging placeholder Q${i} about ${topic}?`,
+        options: ["Option A", "Option B", "Option C", "Option D"],
+        answerIndex: 1,
+        explanation:
+          "This is a placeholder. Regenerate with a clearer topic for a better quiz.",
+      });
     }
 
-    // Store ONLY these 5 as last round for the topic
-    recentQuizByTopic.set(topic, questions.map((q) => q.question));
+    // Trim to exactly 5
+    questions = questions.slice(0, 5);
 
-    // Create session & return first Q
+    // Update memory (keep last 50 questions per topic)
+    recentQuizByTopic.set(
+      topic,
+      [...prevQs, ...questions.map((q) => q.question)].slice(-50)
+    );
+
     const token = "QZ" + Math.random().toString(36).slice(2, 10).toUpperCase();
-    sessions.set(token, { type: "quiz", topic, idx: 0, score: 0, questions, createdAt: Date.now() });
-
+    sessions.set(token, {
+      type: "quiz",
+      topic,
+      idx: 0,
+      score: 0,
+      questions,
+      createdAt: Date.now(),
+    });
+    const q = questions[0];
     res.json({
       ok: true,
       token,
       idx: 1,
       total: 5,
-      question: questions[0].question,
-      options: questions[0].options,
+      question: q.question,
+      options: q.options,
     });
   } catch (e) {
-    console.error("Quiz start failed:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
@@ -503,19 +372,19 @@ app.post("/api/quiz/answer", (req, res) => {
     s.idx += 1;
     const done = s.idx >= 5;
     if (done) {
-      const payload = {
+      sessions.delete(token);
+      return res.json({
         ok: true,
         done: true,
         correct,
         explanation,
         score: s.score,
         total: 5,
-        message: s.score >= 4
-          ? `🎉 Winner! You scored ${s.score}/5`
-          : `❌ Try again. You scored ${s.score}/5`,
-      };
-      sessions.delete(token);
-      return res.json(payload);
+        message:
+          s.score >= 4
+            ? `🎉 Winner! You scored ${s.score}/5`
+            : `❌ Try again. You scored ${s.score}/5`,
+      });
     }
     const next = s.questions[s.idx];
     res.json({
@@ -535,20 +404,8 @@ app.post("/api/quiz/answer", (req, res) => {
   }
 });
 
-// Quick connectivity check (optional)
-app.get("/api/quiz/ping", (_req, res) => {
-  res.json({
-    ok: true,
-    token: "TESTTOKEN",
-    idx: 1,
-    total: 5,
-    question: "Ping question — does the UI render this?",
-    options: ["A", "B", "C", "D"],
-  });
-});
-
 /* ========================
-   Game 3: Conversational Character (hard + single hint per round 8/9/10)
+   Game 3: Conversational Character (hard + single hint on 8/9/10)
 ======================== */
 app.post("/api/character/start", async (req, res) => {
   try {
@@ -558,16 +415,17 @@ app.post("/api/character/start", async (req, res) => {
 
     let candidates = ["Ada Lovelace", "Miyamoto Musashi", "Hedy Lamarr", "Sisyphus", "Alan Turing"];
     try {
-      const raw = await chatCompletion(chooseMessages, 0.7, 160);
+      const raw = await chatCompletion(chooseMessages, 0.7, 200);
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.candidates) && parsed.candidates.length) candidates = parsed.candidates;
-    } catch {}
+    } catch {
+      // fallback list above
+    }
 
-    // pick first not in recent list
     const lowerRecent = exclude.map((x) => x.toLowerCase());
     const name = candidates.find((c) => !lowerRecent.includes(String(c).toLowerCase())) || candidates[0];
 
-    // update recent (keep last 5)
+    // Update recent (store last 5 per topic)
     recentByTopic.set(topic, [name, ...exclude].slice(0, 5));
 
     const id = makeId();
@@ -575,7 +433,7 @@ app.post("/api/character/start", async (req, res) => {
     res.json({
       ok: true,
       sessionId: id,
-      message: "Ask yes/no questions about the secret character. You have 10 rounds. Natural guesses are accepted.",
+      message: "Ask yes/no questions about the secret HARD character. You have 10 rounds. Natural guesses are accepted.",
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -593,14 +451,16 @@ app.post("/api/character/turn", async (req, res) => {
 
     let parsed = { answer: "Okay.", isGuess: false, guessedName: "", hints: [] };
     try {
-      const raw = await chatCompletion(messages, 0.4, 220);
+      const raw = await chatCompletion(messages, 0.4, 260);
       parsed = JSON.parse(raw);
-    } catch {}
+    } catch {
+      // keep defaults
+    }
 
     s.rounds += 1;
     s.history.push({ q: text || "", a: parsed.answer || "" });
 
-    // correct guess
+    // Did the user guess correctly?
     if (parsed.isGuess && parsed.guessedName) {
       const correct = parsed.guessedName.trim().toLowerCase() === s.name.trim().toLowerCase();
       if (correct) {
@@ -611,13 +471,13 @@ app.post("/api/character/turn", async (req, res) => {
           win: true,
           name: s.name,
           answer: parsed.answer,
-          hints: [],
+          hints: [], // stop hints on win
           message: `🎉 Brilliant! You figured it out — ${s.name}!`,
         });
       }
     }
 
-    // out of rounds
+    // Out of rounds?
     if (s.rounds >= 10) {
       const reveal = `Out of rounds! The character was: ${s.name}.`;
       sessions.delete(sessionId);
@@ -632,19 +492,19 @@ app.post("/api/character/turn", async (req, res) => {
       });
     }
 
-    // Exactly one hint on rounds 8, 9, 10
-    let hintOut = [];
-    if (s.rounds >= 8 && Array.isArray(parsed.hints) && parsed.hints.length) {
-      const idx = Math.min(2, s.rounds - 8); // 8->0, 9->1, 10->2
-      const one = parsed.hints[idx] || parsed.hints[0];
-      if (one) hintOut = [one];
+    // Provide at most ONE hint per round (only for rounds 8, 9, 10)
+    const roundNow = s.rounds;
+    let hintsOut = [];
+    if (roundNow >= 8) {
+      const arr = Array.isArray(parsed.hints) ? parsed.hints : [];
+      if (arr.length) hintsOut = [arr[0]];
     }
 
     res.json({
       ok: true,
       done: false,
       answer: parsed.answer,
-      hints: hintOut,
+      hints: hintsOut,
       roundsLeft: 10 - s.rounds,
     });
   } catch (e) {
@@ -653,11 +513,11 @@ app.post("/api/character/turn", async (req, res) => {
 });
 
 /* ========================
-   Game 4: Find the Healthy-Diet (10 questions, 5+5 in UI)
+   Game 4: Find the Healthy-Diet
 ======================== */
 app.post("/api/healthy/start", async (_req, res) => {
   try {
-    // default fallback 10 questions
+    // Default 10
     let questions = [
       "What is your age range (e.g., 18–24, 25–34, 35–44, 45+)?",
       "What is your sex assigned at birth?",
@@ -665,18 +525,20 @@ app.post("/api/healthy/start", async (_req, res) => {
       "Do you follow a dietary pattern (veg/vegan/omnivore/other)?",
       "Any allergies or intolerances (e.g., dairy, nuts, gluten)?",
       "Your primary goal (lose/maintain/gain/energy/other)?",
-      "What’s your usual sleep and wake time?",
-      "How many meals/snacks per day do you prefer?",
+      "What’s your typical daily schedule & preferred meal frequency?",
       "Any cuisine preferences or foods you enjoy/avoid?",
-      "Do you have budget or cooking time constraints?",
+      "Any medical conditions or medications to consider? (Optional non-diagnostic)",
+      "How many meals do you prefer at home vs outside?",
     ];
     try {
-      const raw = await chatCompletion(PROMPTS.healthyQuestions(), 0.4, 260);
+      const raw = await chatCompletion(PROMPTS.healthyQuestions(), 0.4, 280);
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.questions) && parsed.questions.length === 10) {
         questions = parsed.questions;
       }
-    } catch {}
+    } catch {
+      // keep defaults
+    }
     const token = "HD" + Math.random().toString(36).slice(2, 10).toUpperCase();
     sessions.set(token, { type: "healthy", questions, createdAt: Date.now() });
     res.json({ ok: true, token, questions });
@@ -691,11 +553,11 @@ app.post("/api/healthy/plan", async (req, res) => {
     const s = sessions.get(token);
     if (!s || s.type !== "healthy")
       return res.status(400).json({ ok: false, error: "Session not found/expired." });
-    if (!Array.isArray(answers) || answers.length !== 10) {
-      return res.status(400).json({ ok: false, error: "Please provide all 10 answers." });
+    if (!Array.isArray(answers) || answers.length < 8) {
+      return res.status(400).json({ ok: false, error: "Please provide at least 8 answers." });
     }
-    const messages = PROMPTS.healthyPlan({ questions: s.questions, answers });
-    const content = await chatCompletion(messages, 0.6, 1200);
+    const msgs = PROMPTS.healthyPlan({ questions: s.questions, answers });
+    const content = await chatCompletion(msgs, 0.6, 1400);
     sessions.delete(token);
     res.json({ ok: true, plan: content });
   } catch (e) {
@@ -709,6 +571,7 @@ app.post("/api/healthy/plan", async (req, res) => {
 app.post("/api/fpp/start", async (req, res) => {
   try {
     const { category } = req.body ?? {};
+    // 1) Get product + current price
     let suggestion = {
       product: "Wireless Earbuds",
       price: 3999,
@@ -716,11 +579,12 @@ app.post("/api/fpp/start", async (req, res) => {
       reason: "Popular mid-range pick",
     };
     try {
-      const raw = await chatCompletion(PROMPTS.priceProduct(category), 0.6, 220);
+      const raw = await chatCompletion(PROMPTS.priceProduct(category), 0.6, 260);
       const parsed = JSON.parse(raw);
       if (parsed?.product && parsed?.price && parsed?.currency) suggestion = parsed;
     } catch {}
 
+    // 2) Get 10 yes/no questions
     let questions = [
       "Will new features significantly improve this product in 5 years?",
       "Will raw material costs rise substantially?",
@@ -734,7 +598,7 @@ app.post("/api/fpp/start", async (req, res) => {
       "Will import/export duties increase?",
     ];
     try {
-      const rawQ = await chatCompletion(PROMPTS.priceQuestions(suggestion.product), 0.4, 280);
+      const rawQ = await chatCompletion(PROMPTS.priceQuestions(suggestion.product), 0.4, 320);
       const parsedQ = JSON.parse(rawQ);
       if (Array.isArray(parsedQ?.questions) && parsedQ.questions.length === 10)
         questions = parsedQ.questions;
@@ -792,7 +656,7 @@ app.post("/api/fpp/answers", async (req, res) => {
           qa,
         }),
         0.5,
-        500
+        600
       );
       const parsed = JSON.parse(raw);
       if (typeof parsed?.predictedPrice === "number" && isFinite(parsed.predictedPrice)) {
@@ -812,6 +676,7 @@ app.post("/api/fpp/answers", async (req, res) => {
   }
 });
 
+// Reveal AI price after player's guess
 app.post("/api/fpp/guess", (req, res) => {
   try {
     const { token, guess } = req.body ?? {};
@@ -846,40 +711,42 @@ app.post("/api/fpp/guess", (req, res) => {
 });
 
 /* ========================
-   Game 6: Budget Glam Builder (with tags)
+   Game 6: Budget Glam Builder (with tags + server budget guard)
 ======================== */
 app.post("/api/glam/start", async (req, res) => {
   try {
     const { gender = "Unisex", budgetInr } = req.body ?? {};
-    const budget = Math.max(10000, Number(budgetInr) || 15000);
+    const budget = Math.max(10000, Number(budgetInr) || 15000); // minimum ₹10,000
 
     // Fallback list if model JSON fails (30 items)
     let items = Array.from({ length: 30 }).map((_, i) => ({
       name: `Starter Item ${i + 1}`,
-      price: Math.max(50, Math.floor(250 + Math.random() * 1500)),
+      price: Math.floor(250 + Math.random() * 1500),
       description: "A practical everyday pick.",
       category: ["Cleanser","Moisturizer","Sunscreen","Serum","Lip Care","Body","Hair","Mask","Toner","Eye Cream","Primer","Exfoliant"][i % 12],
       ecoFriendly: i % 3 === 0,
       tags: []
     }));
 
-    // Try to get model-generated items
     try {
       const raw = await chatCompletion(PROMPTS.glamSuggest({ gender, budgetInr: budget }), 0.5, 1800);
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.items) && parsed.items.length >= 20) {
-        items = parsed.items.slice(0, 30).map(it => ({
-          name: String(it.name || "").slice(0, 80),
-          price: Math.max(50, Math.floor(Number(it.price) || 0)),
-          description: String(it.description || "").slice(0, 140),
-          category: String(it.category || "Other").slice(0, 40),
-          ecoFriendly: !!it.ecoFriendly,
-          tags: Array.isArray(it.tags) ? it.tags.slice(0, 2).map(x=>String(x).slice(0,24)) : []
-        }));
+        items = parsed.items
+          .slice(0, 30)
+          .map(it => ({
+            name: String(it.name || "").slice(0, 80),
+            price: Math.max(50, Number(it.price) || 0),
+            description: String(it.description || "").slice(0, 120),
+            category: String(it.category || "Other").slice(0, 40),
+            ecoFriendly: !!it.ecoFriendly,
+            tags: Array.isArray(it.tags) ? it.tags.slice(0, 5).map(t => String(t).slice(0, 20)) : []
+          }));
+        // Pad to exactly 30 if model returned < 30
         while (items.length < 30) {
           items.push({
             name: `Extra Item ${items.length + 1}`,
-            price: Math.max(50, Math.floor(300 + Math.random() * 1200)),
+            price: Math.floor(300 + Math.random() * 1200),
             description: "Useful addition.",
             category: "Other",
             ecoFriendly: Math.random() < 0.3,
@@ -917,9 +784,10 @@ app.post("/api/glam/score", async (req, res) => {
     const uniqueIdxs = [...new Set(idxs)].filter(i => Number.isInteger(i) && i >= 0 && i < s.items.length);
 
     const selected = uniqueIdxs.map(i => s.items[i]);
-    const secs = Math.max(0, Math.min(180, Number(timeTaken) || 0));
-    const total = selected.reduce((sum, it) => sum + Math.max(0, Number(it.price) || 0), 0);
+    const total = selected.reduce((sum, it) => sum + Number(it.price || 0), 0);
+    const secs = Math.max(0, Number(timeTaken) || 0);
 
+    // New minimum picks: 12
     if (selected.length < 12) {
       sessions.delete(token);
       return res.json({
@@ -937,20 +805,32 @@ app.post("/api/glam/score", async (req, res) => {
       });
     }
 
+    // Score with AI
     let scored = { score: 0, positives: [], negatives: [], summary: "No summary." };
     try {
       const raw = await chatCompletion(PROMPTS.glamScore({
         budgetInr: s.budgetInr,
         selected,
         timeTaken: secs
-      }), 0.4, 1200);
+      }), 0.4, 1300);
       const parsed = JSON.parse(raw);
       if (typeof parsed.score === "number") scored.score = Math.max(0, Math.min(100, parsed.score));
       if (Array.isArray(parsed.positives)) scored.positives = parsed.positives.slice(0, 6);
       if (Array.isArray(parsed.negatives)) scored.negatives = parsed.negatives.slice(0, 6);
       if (typeof parsed.summary === "string") scored.summary = parsed.summary;
     } catch {
-      // keep defaults
+      // simple fallback scoring if model fails
+      const ecoShare = selected.filter(x=>x.ecoFriendly).length / selected.length;
+      const spendRatio = Math.min(1, total / Math.max(1, s.budgetInr));
+      scored.score = Math.round(60 * spendRatio + 20 * ecoShare + Math.min(20, selected.length));
+      scored.summary = "Fallback scoring applied.";
+    }
+
+    // 🔒 Server-side budget guard (soft penalty + negative note)
+    const overBudget = total > s.budgetInr;
+    if (overBudget) {
+      scored.negatives = ['Total spend exceeded the budget', ...(scored.negatives || [])].slice(0,6);
+      scored.score = Math.max(0, Math.min(100, Math.round(scored.score * 0.85))); // 15% penalty
     }
 
     sessions.delete(token);
