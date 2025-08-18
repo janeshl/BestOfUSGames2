@@ -268,27 +268,53 @@ app.post("/api/predict-future", async (req, res) => {
 });
 
 /* ========================
-   Game 2: 5-Round Quiz (no repeat questions per topic)
+   Game 2: 5-Round Quiz (no repeat questions per topic, fully sanitized)
 ======================== */
 app.post("/api/quiz/start", async (req, res) => {
   try {
     const { topic = "General" } = req.body ?? {};
     const messages = PROMPTS.quiz(topic);
 
-    // Generate questions
+    // 1) Ask model
     let parsed = { questions: [] };
     try {
       const raw = await chatCompletion(messages, 0.5, 900);
       parsed = JSON.parse(raw);
-    } catch {}
+    } catch (e) {
+      console.warn("Quiz JSON parse failed — using placeholders:", e?.message);
+    }
 
-    // De-duplicate against previous questions for this topic
+    // 2) De-duplicate against previous questions for this topic
     const prevSet = new Set((recentQuizByTopic.get(topic) || []).map((q) => q.toLowerCase()));
-    const fresh = (Array.isArray(parsed.questions) ? parsed.questions : []).filter(
-      (q) => q?.question && !prevSet.has(String(q.question).toLowerCase())
-    );
+    const rawQs = Array.isArray(parsed.questions) ? parsed.questions : [];
 
-    // Ensure 5 questions
+    // 3) Sanitize each question: ensure shape, options[4], and 1..4 answerIndex
+    const cleaned = rawQs.map((q, idx) => {
+      const question = (q?.question ? String(q.question) : "").trim();
+      const optionsIn = Array.isArray(q?.options) ? q.options : [];
+      // Enforce exactly 4 string options
+      const options = optionsIn.slice(0, 4).map(o => String(o ?? "")).concat(
+        Array(Math.max(0, 4 - optionsIn.length)).fill("").map((_, i) => `Option ${["A","B","C","D"][optionsIn.length+i]}`)
+      ).slice(0, 4);
+
+      // Normalize answerIndex to 1..4
+      let answerIndex = Number(q?.answerIndex);
+      if (![1,2,3,4].includes(answerIndex)) answerIndex = 1;
+
+      const explanation = String(q?.explanation ?? "").trim();
+
+      return {
+        question: question || `Question ${idx + 1} about ${topic}?`,
+        options,
+        answerIndex,
+        explanation: explanation || "Keep learning! This helps solidify the concept."
+      };
+    });
+
+    // 4) Filter out repeats by question text
+    const fresh = cleaned.filter(q => q?.question && !prevSet.has(q.question.toLowerCase()));
+
+    // 5) Ensure exactly 5 questions (pad with placeholders if needed)
     const questions = fresh.slice(0, 5);
     while (questions.length < 5) {
       const i = questions.length + 1;
@@ -296,15 +322,15 @@ app.post("/api/quiz/start", async (req, res) => {
         question: `Placeholder Q${i} about ${topic}?`,
         options: ["Option A", "Option B", "Option C", "Option D"],
         answerIndex: 1,
-        explanation:
-          "This is a placeholder. Regenerate with a clearer topic for a better quiz.",
+        explanation: "This is a placeholder. Regenerate with a clearer topic for a better quiz."
       });
     }
 
-    // Update memory (store last 25 Qs per topic)
+    // 6) Remember last 25 questions to avoid repeats next time
     const updated = [...(recentQuizByTopic.get(topic) || []), ...questions.map((q) => q.question)].slice(-25);
     recentQuizByTopic.set(topic, updated);
 
+    // 7) Create session and return first question
     const token = "QZ" + Math.random().toString(36).slice(2, 10).toUpperCase();
     sessions.set(token, {
       type: "quiz",
@@ -314,6 +340,7 @@ app.post("/api/quiz/start", async (req, res) => {
       questions,
       createdAt: Date.now(),
     });
+
     const q = questions[0];
     res.json({
       ok: true,
@@ -321,50 +348,10 @@ app.post("/api/quiz/start", async (req, res) => {
       idx: 1,
       total: 5,
       question: q.question,
-      options: q.options,
+      options: q.options
     });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/quiz/answer", (req, res) => {
-  try {
-    const { token, choice } = req.body ?? {};
-    const s = sessions.get(token);
-    if (!s || s.type !== "quiz")
-      return res.status(400).json({ ok: false, error: "Session not found/expired." });
-    const q = s.questions[s.idx];
-    const correct = Number(choice) === Number(q.answerIndex);
-    if (correct) s.score += 1;
-    const explanation = q.explanation || "";
-    s.idx += 1;
-    const done = s.idx >= 5;
-    if (done) {
-      sessions.delete(token);
-      return res.json({
-        ok: true,
-        done: true,
-        correct,
-        explanation,
-        score: s.score,
-        total: 5,
-      });
-    }
-    const next = s.questions[s.idx];
-    res.json({
-      ok: true,
-      done: false,
-      correct,
-      explanation,
-      next: {
-        idx: s.idx + 1,
-        total: 5,
-        question: next.question,
-        options: next.options,
-      },
-    });
-  } catch (e) {
+    console.error("Quiz start failed:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
@@ -666,42 +653,43 @@ app.post("/api/fpp/guess", (req, res) => {
 app.post("/api/glam/start", async (req, res) => {
   try {
     const { gender = "Unisex", budgetInr } = req.body ?? {};
-    const budget = Math.max(10000, Number(budgetInr) || 15000); // new minimum ₹10,000
+    const budget = Math.max(10000, Number(budgetInr) || 15000); // UI expects min ₹10,000
 
     // Fallback list if model JSON fails (30 items)
     let items = Array.from({ length: 30 }).map((_, i) => ({
       name: `Starter Item ${i + 1}`,
-      price: Math.floor(250 + Math.random() * 1500),
+      price: Math.max(50, Math.floor(250 + Math.random() * 1500)),
       description: "A practical everyday pick.",
       category: ["Cleanser","Moisturizer","Sunscreen","Serum","Lip Care","Body","Hair","Mask","Toner","Eye Cream","Primer","Exfoliant"][i % 12],
       ecoFriendly: i % 3 === 0
     }));
 
+    // Try to get model-generated items (keeps keys used by UI: name, price, description)
     try {
       const raw = await chatCompletion(PROMPTS.glamSuggest({ gender, budgetInr: budget }), 0.5, 1600);
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.items) && parsed.items.length >= 20) {
-        items = parsed.items
-          .slice(0, 30)
-          .map(it => ({
-            name: String(it.name || "").slice(0, 80),
-            price: Math.max(50, Number(it.price) || 0),
-            description: String(it.description || "").slice(0, 120),
-            category: String(it.category || "Other").slice(0, 40),
-            ecoFriendly: !!it.ecoFriendly
-          }));
-        // Pad to exactly 30 if LLM returned < 30
+        items = parsed.items.slice(0, 30).map(it => ({
+          name: String(it.name || "").slice(0, 80),
+          price: Math.max(50, Math.floor(Number(it.price) || 0)),
+          description: String(it.description || "").slice(0, 120),
+          category: String(it.category || "Other").slice(0, 40),
+          ecoFriendly: !!it.ecoFriendly
+        }));
+        // Pad to exactly 30 if fewer returned
         while (items.length < 30) {
           items.push({
             name: `Extra Item ${items.length + 1}`,
-            price: Math.floor(300 + Math.random() * 1200),
+            price: Math.max(50, Math.floor(300 + Math.random() * 1200)),
             description: "Useful addition.",
             category: "Other",
             ecoFriendly: Math.random() < 0.3
           });
         }
       }
-    } catch {}
+    } catch {
+      // keep fallback items
+    }
 
     const token = "GB" + Math.random().toString(36).slice(2, 10).toUpperCase();
     sessions.set(token, {
@@ -712,6 +700,7 @@ app.post("/api/glam/start", async (req, res) => {
       createdAt: Date.now()
     });
 
+    // UI expects: token, items, budgetInr
     res.json({ ok: true, token, gender, budgetInr: budget, items });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -725,14 +714,18 @@ app.post("/api/glam/score", async (req, res) => {
     if (!s || s.type !== "glam")
       return res.status(400).json({ ok: false, error: "Session not found/expired." });
 
+    // Normalize inputs
     const idxs = Array.isArray(selectedIndices) ? selectedIndices : [];
     const uniqueIdxs = [...new Set(idxs)].filter(i => Number.isInteger(i) && i >= 0 && i < s.items.length);
 
     const selected = uniqueIdxs.map(i => s.items[i]);
-    const total = selected.reduce((sum, it) => sum + Number(it.price || 0), 0);
-    const secs = Math.max(0, Number(timeTaken) || 0);
+    // Clamp time taken to [0,180] as per UI timer
+    const secs = Math.max(0, Math.min(180, Number(timeTaken) || 0));
 
-    // New minimum picks: 12
+    // Compute spend
+    const total = selected.reduce((sum, it) => sum + Math.max(0, Number(it.price) || 0), 0);
+
+    // Enforce minimum picks: 12 (matches UI message)
     if (selected.length < 12) {
       sessions.delete(token);
       return res.json({
@@ -750,7 +743,7 @@ app.post("/api/glam/score", async (req, res) => {
       });
     }
 
-    // Score with AI
+    // Ask model to score the kit
     let scored = { score: 0, positives: [], negatives: [], summary: "No summary." };
     try {
       const raw = await chatCompletion(PROMPTS.glamScore({
@@ -763,11 +756,14 @@ app.post("/api/glam/score", async (req, res) => {
       if (Array.isArray(parsed.positives)) scored.positives = parsed.positives.slice(0, 6);
       if (Array.isArray(parsed.negatives)) scored.negatives = parsed.negatives.slice(0, 6);
       if (typeof parsed.summary === "string") scored.summary = parsed.summary;
-    } catch {}
+    } catch {
+      // keep defaults if model fails
+    }
 
     sessions.delete(token);
 
     const win = scored.score >= 75;
+    // UI consumes: ok, done, win, score, summary, budgetInr, totalSpend, timeTaken
     res.json({
       ok: true,
       done: true,
@@ -787,6 +783,7 @@ app.post("/api/glam/score", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 
 /* ========================
    Healthcheck
