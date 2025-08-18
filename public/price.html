@@ -1,0 +1,51 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Future Price Prediction</title>
+  <link rel="stylesheet" href="styling.css" />
+</head>
+<body class="container">
+  <h2 class="section-title">Future Price Prediction</h2>
+
+  <article class="card" id="fpp-card">
+    <form id="fpp-start" class="game-form" autocomplete="off">
+      <input name="category" placeholder="(Optional) Suggest a category, e.g., Smartphones" autocomplete="off" autocapitalize="none" spellcheck="false" />
+      <button class="btn" type="submit"><span>Start</span></button>
+    </form>
+
+    <div id="fpp-intro" class="pill" style="display:none"></div>
+
+    <div id="fpp-qa" class="hidden">
+      <div class="badge" id="fpp-status">Question 1 of 10</div>
+      <div id="fpp-question" class="card-copy" style="margin:10px 0 6px"></div>
+      <div class="row">
+        <button id="fpp-yes" class="btn" type="button"><span>Yes</span></button>
+        <button id="fpp-no" class="btn" type="button"><span>No</span></button>
+      </div>
+    </div>
+
+    <div id="fpp-actions" class="hidden" style="margin-top:12px">
+      <button id="fpp-generate" class="btn" type="button"><span>Generate AI Price</span></button>
+    </div>
+
+    <div id="fpp-guess-wrap" class="hidden" style="margin-top:12px">
+      <div class="card-copy">What do you think the price will be in 5 years?</div>
+      <div class="row">
+        <input id="fpp-guess" placeholder="Enter your guess (numbers only)" inputmode="decimal" />
+        <button id="fpp-submit-guess" class="btn" type="button"><span>Submit Guess</span></button>
+      </div>
+    </div>
+
+    <pre id="fpp-out" class="result" style="margin-top:12px"></pre>
+  </article>
+
+  <div style="margin-top:24px;display:flex;justify-content:flex-start;">
+    <a href="./games.html" class="back">← Back</a>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
