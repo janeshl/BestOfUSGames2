@@ -1,15 +1,16 @@
 <!DOCTYPE html>
-<html lang="en"><head>
+<html lang="en">
+<head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>💄 Budget Glam Builder</title>
+  <title>Budget Glam Builder</title>
   <link rel="stylesheet" href="styling.css"/>
 </head>
 <body class="container">
   <h2 class="section-title">💄 Budget Glam Builder</h2>
 
   <article class="card" id="glam-card">
-    <!-- Start -->
+    <!-- Start Form -->
     <form id="glam-start" class="game-form" autocomplete="off">
       <div class="row">
         <select name="gender" required>
@@ -31,10 +32,7 @@
       <div class="badge" id="glam-page">Page: 1</div>
     </div>
 
-    <!-- Toast -->
-    <div id="glam-toast" class="pill hidden" style="margin-top:10px;"></div>
-
-    <!-- Bucketed list -->
+    <!-- Product List (bucketed cards) -->
     <div id="glam-list" class="list hidden" style="margin-top:10px"></div>
 
     <!-- Pager -->
@@ -43,29 +41,28 @@
       <button id="glam-next" class="btn" type="button"><span>Next</span></button>
     </div>
 
-    <!-- Actions -->
+    <!-- In-game Actions -->
     <div id="glam-actions" class="hidden" style="margin-top:12px">
       <button id="glam-finish" class="btn" type="button"><span>Finish Now</span></button>
     </div>
 
-    <!-- Review page -->
-    <section id="glam-review" class="hidden" style="margin-top:16px;">
-      <div class="card-copy" id="glam-review-meta"></div>
-      <div class="list" id="glam-review-list" style="margin-top:8px;"></div>
-      <div style="margin-top:12px;">
+    <!-- Review & Generate Results (shown after Finish Now or timer ends) -->
+    <div id="glam-review" class="hidden" style="margin-top:12px">
+      <div class="pill" style="margin-bottom:8px">Review your selections</div>
+      <div id="glam-review-list" class="list"></div>
+      <div style="margin-top:10px">
         <button id="glam-generate" class="btn" type="button"><span>Generate Results</span></button>
       </div>
-    </section>
+    </div>
 
-    <!-- Results page -->
-    <section id="glam-results" class="hidden" style="margin-top:16px;">
-      <pre id="glam-out" class="result" style="white-space:pre-wrap;"></pre>
-      <h4 class="section-title" style="margin-top:12px;">Your Products</h4>
-      <div class="list" id="glam-detail"></div>
-    </section>
+    <!-- Output / Results -->
+    <pre id="glam-out" class="result" style="margin-top:12px; display:none;"></pre>
   </article>
 
-  <div style="margin-top:24px"><a class="back" href="./games.html">← Back</a></div>
+  <div style="margin-top:24px">
+    <a class="back" href="./games.html">← Back</a>
+  </div>
+
   <script src="script.js"></script>
 </body>
 </html>
