@@ -463,7 +463,11 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Budget Glam Builder — Auto-finish + allow finish with <12 picks
+   Budget Glam Builder — Bucketed list + 3 skin tips
+   - Group items by category, show name + 1-sentence description
+   - Auto-finish on timer (fail if <12)
+   - Early finish allowed (fail if <12)
+   - Over-budget guard
 ======================== */
 (function(){
   const form = document.querySelector('#glam-start');
@@ -485,7 +489,7 @@ function html(e,m){if(e)e.innerHTML=m}
   const actionsRow = document.querySelector('#glam-actions');
   const finishBtn  = document.querySelector('#glam-finish');
 
-  // Review + Results sections
+  // Review + Results sections (already in glam.html)
   const reviewSec   = document.querySelector('#glam-review');
   const reviewMeta  = document.querySelector('#glam-review-meta');
   const reviewList  = document.querySelector('#glam-review-list');
@@ -527,8 +531,7 @@ function html(e,m){if(e)e.innerHTML=m}
       timerEl.textContent = `Time: ${timeLeft}s`;
       if(timeLeft <= 0){
         clearTimer();
-        // ⏲️ Auto-finish with current selections.
-        // If <12 picks, server will mark failed; client still shows score/tips.
+        // Auto-finish with current picks; fail if <12
         generateResults(true);
       }
     }, 1000);
@@ -546,50 +549,100 @@ function html(e,m){if(e)e.innerHTML=m}
     pageEl.textContent   = `Page: ${Math.min(page+1, totalPages)}`;
   }
 
+  // Helper: make a single sentence from product info
+  function oneSentence(p){
+    const desc = (p.description || '').trim();
+    if(desc){
+      // First sentence only
+      const m = desc.match(/[^.!?]+[.!?]?/);
+      if(m) return m[0].trim().replace(/\s+/g,' ');
+    }
+    // Fallback: generic line by category / eco tag
+    const cat = (p.category || 'Product').toLowerCase();
+    const eco = p.ecoFriendly ? ' Eco-friendly choice.' : '';
+    return `A ${cat} suitable for everyday use.${eco}`.trim();
+  }
+
+  // Render a bucketed page view (by category) with clickable items
+  function renderBucketed(container, indices, clickable=true){
+    container.innerHTML = '';
+    if(!indices.length){
+      container.textContent = 'No items.';
+      return;
+    }
+
+    // Group by category
+    const groups = {};
+    for(const idx of indices){
+      const p = items[idx];
+      const cat = p?.category || 'Other';
+      if(!groups[cat]) groups[cat] = [];
+      groups[cat].push(idx);
+    }
+
+    // Deterministic category order: common first, then alpha
+    const preferred = ['Sunscreen','Cleanser','Moisturizer','Serum','Exfoliant','Toner','Eye Cream','Mask','Lip Care','Body','Hair','Primer','Spot Treatment','Other'];
+    const cats = Object.keys(groups).sort((a,b)=>{
+      const ia = preferred.indexOf(a); const ib = preferred.indexOf(b);
+      if(ia !== -1 || ib !== -1){
+        return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+      }
+      return a.localeCompare(b);
+    });
+
+    for(const cat of cats){
+      const head = document.createElement('div');
+      head.className = 'card-copy';
+      head.textContent = `• ${cat}`;
+      head.style.margin = '8px 0 4px';
+      container.appendChild(head);
+
+      for(const idx of groups[cat]){
+        const p = items[idx];
+        const row = document.createElement('div');
+        row.className = 'option';
+        row.style.whiteSpace = 'pre-wrap';
+        row.style.cursor = clickable ? 'pointer' : 'default';
+        row.style.background = selected.has(idx) && clickable ? 'rgba(80,200,120,.2)' : '';
+
+        // Name + price (first line)
+        const line1 = `${p.name} — ₹${p.price}`;
+        // One-sentence description (second line)
+        const line2 = oneSentence(p);
+
+        row.textContent = `${line1}\n${line2}`;
+        if(clickable){
+          row.onclick = ()=>{
+            if(finishing) return;
+
+            if(selected.has(idx)){
+              selected.delete(idx);
+              row.style.background = '';
+              updateHUD();
+              return;
+            }
+            const prospective = currentSpend() + (Number(p.price)||0);
+            if(prospective > budgetInr){
+              showToast(`🚫 Over budget: selecting this would cost ₹${prospective} (> ₹${budgetInr})`);
+              return;
+            }
+            selected.add(idx);
+            row.style.background = 'rgba(80,200,120,.2)';
+            updateHUD();
+          };
+        }
+
+        container.appendChild(row);
+      }
+    }
+  }
+
   function renderPage(){
-    listEl.innerHTML = '';
     const start = page * perPage;
     const end   = Math.min(items.length, start + perPage);
-
-    for(let i=start; i<end; i++){
-      const p = items[i];
-      const div = document.createElement('div');
-      div.className = 'option';
-
-      const tagsArr = Array.isArray(p.tags) ? p.tags : [];
-      const ecoTag = p.ecoFriendly ? 'Eco-Friendly' : null;
-      const baseTags = [p.category || null, ecoTag].filter(Boolean);
-      const allTags = [...baseTags, ...tagsArr].filter(Boolean).slice(0, 4);
-      const tagsStr = allTags.length ? ` [${allTags.join(' · ')}]` : '';
-
-      div.textContent = `${p.name} — ₹${p.price}${tagsStr}\n${p.description || ''}`;
-      div.style.whiteSpace = 'pre-wrap';
-      div.style.cursor = 'pointer';
-      div.style.background = selected.has(i) ? 'rgba(80,200,120,.2)' : '';
-
-      div.onclick = ()=>{
-        if(finishing) return;
-
-        if(selected.has(i)){
-          selected.delete(i);
-          div.style.background = '';
-          updateHUD();
-          return;
-        }
-
-        const prospective = currentSpend() + (Number(p.price)||0);
-        if(prospective > budgetInr){
-          showToast(`🚫 Over budget: selecting this would cost ₹${prospective} (> ₹${budgetInr})`);
-          return;
-        }
-
-        selected.add(i);
-        div.style.background = 'rgba(80,200,120,.2)';
-        updateHUD();
-      };
-
-      listEl.appendChild(div);
-    }
+    const idxs  = [];
+    for(let i=start; i<end; i++) idxs.push(i);
+    renderBucketed(listEl, idxs, /*clickable*/ true);
 
     prevBtn.disabled = page === 0 || finishing;
     nextBtn.disabled = end >= items.length || finishing;
@@ -601,7 +654,7 @@ function html(e,m){if(e)e.innerHTML=m}
   function goToReview(){
     clearTimer();
     if(selected.size < 12){
-      // Allow finishing early, but it's an immediate fail with results.
+      // Finish now even with <12 → immediate results (failed)
       generateResults(false);
       return;
     }
@@ -609,20 +662,34 @@ function html(e,m){if(e)e.innerHTML=m}
     finishing = true;
     hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
 
-    reviewList.innerHTML = '';
     const spend = currentSpend();
     reviewMeta.textContent = `You selected ${selected.size} items, Spend: ₹${spend} / Budget: ₹${budgetInr} | Time: ${180 - Math.max(0,timeLeft)}s`;
-    Array.from(selected).forEach(idx => {
-      const p = items[idx];
-      const d = document.createElement('div');
-      d.className = 'option';
-      const tags = [...(p.tags||[]), p.category].filter(Boolean).slice(0,4).join(' · ');
-      d.textContent = `${p.name} — ₹${p.price}${tags ? ` [${tags}]` : ''}\n${p.description || ''}`;
-      d.style.whiteSpace = 'pre-wrap';
-      reviewList.appendChild(d);
+
+    // Render selected items bucketed (not clickable)
+    const chosen = Array.from(selected);
+    renderBucketed(reviewList, chosen, /*clickable*/ false);
+    show(reviewSec);
+  }
+
+  // Build 3 skin tips (context aware)
+  function skinTips(selItems){
+    const hasSPF = selItems.some(p => {
+      const text = `${p.name} ${p.category} ${(p.tags||[]).join(' ')}`.toLowerCase();
+      return text.includes('spf') || text.includes('sunscreen') || (p.category||'').toLowerCase()==='sunscreen';
     });
 
-    show(reviewSec);
+    if(!hasSPF){
+      return [
+        "Add a broad-spectrum SPF 30+ to your daytime routine.",
+        "Apply two-finger rule for face/neck; reapply every 2–3 hours outdoors.",
+        "Seek shade 10am–4pm and wear sunglasses/hat for extra protection."
+      ];
+    }
+    return [
+      "Reapply sunscreen every 2–3 hours, and after sweat or towel-dry.",
+      "Use the two-finger rule for adequate coverage; don't forget ears and neck.",
+      "Combine SPF with shade and sunglasses for best protection."
+    ];
   }
 
   // Step 3: Generate Results (server scoring)
@@ -630,7 +697,6 @@ function html(e,m){if(e)e.innerHTML=m}
     if(finishing && !autoTimed) return; // prevent accidental double calls
     finishing = true;
 
-    // Hide gameplay & review; go to results page
     hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow); hide(reviewSec);
     outEl.textContent = 'Scoring your kit...';
     detailList.innerHTML = '';
@@ -652,6 +718,9 @@ function html(e,m){if(e)e.innerHTML=m}
         return;
       }
 
+      const selItems = Array.from(selected).map(i=>items[i]);
+      const tips = skinTips(selItems);
+
       // Summary block
       const pos = Array.isArray(json.positives) ? json.positives.slice(0,6) : [];
       const neg = Array.isArray(json.negatives) ? json.negatives.slice(0,6) : [];
@@ -668,21 +737,12 @@ function html(e,m){if(e)e.innerHTML=m}
         lines.push('\n⚠️ Points to improve:');
         neg.forEach((n,i)=>lines.push(`  ${i+1}. ${n}`));
       }
-
-      // Skin protection tip
-      const selItems = Array.from(selected).map(i=>items[i]);
-      const hasSPF = selItems.some(p => {
-        const text = `${p.name} ${p.category} ${(p.tags||[]).join(' ')}`.toLowerCase();
-        return text.includes('spf') || text.includes('sunscreen') || (p.category||'').toLowerCase()==='sunscreen';
-      });
-      const tip = hasSPF
-        ? "🧴 Tip: Reapply sunscreen every 2–3 hours, even indoors near windows."
-        : "🧴 Tip: Add a broad-spectrum SPF 30+ sunscreen for daily protection.";
-      lines.push('\n' + tip);
-
+      // 3 skin tips
+      lines.push('\n🧴 Skin Protection Tips:');
+      tips.forEach((t,i)=> lines.push(`  ${i+1}. ${t}`));
       outEl.textContent = lines.join('\n');
 
-      // Two-sentence blurb per product
+      // Two-sentence blurb per product (keep)
       detailList.innerHTML = '';
       selItems.forEach((p) => {
         const div = document.createElement('div');
@@ -691,7 +751,7 @@ function html(e,m){if(e)e.innerHTML=m}
         const tagTxt = tags.length ? ` [${tags.join(' · ')}]` : '';
         const s1 = `${p.name}${tagTxt} — ₹${p.price}.`;
         const s2 = (p.description && p.description.trim().length)
-          ? `${p.description.trim().replace(/\.*$/, '')}.`
+          ? `${oneSentence(p)}`
           : `Useful addition to round out your routine.`;
         div.textContent = `${s1} ${s2}`;
         detailList.appendChild(div);
@@ -704,13 +764,13 @@ function html(e,m){if(e)e.innerHTML=m}
   prevBtn.addEventListener('click', ()=>{ if(page>0 && !finishing){ page--; renderPage(); } });
   nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length && !finishing){ page++; renderPage(); } });
 
-  // Allow finishing before 12 picks — will be marked failed by server
+  // Allow finishing before 12 picks — marked failed by server/results
   finishBtn.addEventListener('click', (e)=>{
     e.preventDefault();
     if(selected.size < 12){
-      generateResults(false); // submit immediately (failed)
+      generateResults(false); // immediate results (failed)
     } else {
-      goToReview();           // go to review first if valid
+      goToReview();           // review first if valid
     }
   });
 
@@ -728,6 +788,7 @@ function html(e,m){if(e)e.innerHTML=m}
     const gender = form.gender.value;
     const budget = Number(form.budget.value);
 
+    // Hide the form once game starts
     form.style.display = 'none';
 
     try{
