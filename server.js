@@ -189,26 +189,31 @@ JSON only.`,
     },
   ],
 
-  // Game 6: Budget Glam Builder (with tags)
+  // Game 6: Budget Glam Builder (strict names + tags)
   glamSuggest: ({ gender, budgetInr }) => [
     {
       role: "system",
-      content: `Suggest 30 unique skincare/beauty products appropriate for the specified gender (or unisex).
-Rules:
-- Currency: INR
-- Each item price should be reasonable for Indian market; can vary widely but keep realistic.
-- Cover diverse uses: cleanser, moisturizer, SPF/sunscreen, serum, exfoliant, toner/essence, face mask, lip care, hand/body care, hair care, spot treatment, eye cream, primer, etc.
-- Include both everyday basics and a few extras; avoid duplicate names.
-- Keep descriptions <= 15 words.
-- Mark ecoFriendly=true for recyclable/mineral-filter/clean-formulation/refill options.
+      content: `Suggest 30 skincare/beauty products appropriate for the specified gender (or unisex).
 
-Return STRICT JSON:
+Requirements:
+- Market: India. Use realistic, specific product names (brand or brand-like), e.g., "DermaSoft Hydrating Cleanser", not "Starter Item".
+- Currency: INR. Prices should be realistic for India (budget to mid-premium).
+- Vary categories: cleanser, moisturizer, SPF/sunscreen, serum, exfoliant, toner/essence, face mask, lip care, body lotion, hair care, spot treatment, eye cream, primer, etc.
+- Each item: one concise sentence (<= 15 words) describing benefit/texture/standout trait.
+- Include "category" and a boolean "ecoFriendly".
+- Optionally include "tags": short keywords like ["SPF50","fragrance-free","vitamin C"].
+
+Return STRICT JSON ONLY:
 {
   "items": [
-    { "name": string, "price": number, "description": string, "category": string, "ecoFriendly": boolean, "tags": string[] }
-    x30
+    { "name": string, "price": number, "description": string, "category": string, "ecoFriendly": boolean, "tags": string[] } x30
   ]
-}`,
+}
+
+Rules:
+- No generic names like "Starter Item", "Sample Product", "Basic Moisturizer".
+- No duplicate names; keep categories diverse.
+- Keep sentences short and helpful.`,
     },
     {
       role: "user",
@@ -432,7 +437,7 @@ app.post("/api/character/start", async (req, res) => {
     res.json({
       ok: true,
       sessionId: id,
-      message: "Ask questions about the ecret Person/Character. You have 10 rounds. Natural guesses are accepted.",
+      message: "Ask questions about the secret Person/Character. You have 10 rounds. Natural guesses are accepted.",
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -754,51 +759,112 @@ app.post("/api/fpp/guess", (req, res) => {
 });
 
 /* ========================
-   Game 6: Budget Glam Builder (with tags + server budget guard)
+   Game 6: Budget Glam Builder (updated)
 ======================== */
+
+// ---------- Synthetic fallback (brand-like names) ----------
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)] }
+function randInt(lo, hi){ return Math.floor(lo + Math.random()*(hi-lo+1)) }
+function sentenceCap(s){ return (s||'').replace(/\s+/g,' ').trim().replace(/^\w/, c=>c.toUpperCase()) }
+
+function synthItems30(gender, budget){
+  const cats = [
+    "Cleanser","Moisturizer","Sunscreen","Serum","Exfoliant","Toner","Eye Cream","Mask",
+    "Lip Care","Body Lotion","Hair Care","Primer","Spot Treatment"
+  ];
+  const nameSeeds = {
+    Cleanser: ["Hydrating Gel Cleanser","Gentle Foam Wash","Rice Water Cleanser","Amino Acid Face Wash","Ceramide Cleanser"],
+    Moisturizer: ["Barrier Repair Cream","Oil-Free Gel Moisturizer","Nourishing Day Cream","Lightweight Milk Lotion","Ceramide+HA Cream"],
+    Sunscreen: ["Matte Sunscreen SPF50 PA+++","Hybrid Sunscreen SPF40","Mineral Sunscreen SPF50","Aqua Gel SPF50","Daily Shield SPF30"],
+    Serum: ["Vitamin C 10% Serum","Niacinamide 5% Serum","Hyaluronic Booster","Retinal Night Serum","Peptide Firming Serum"],
+    Exfoliant: ["Mandelic 5% Exfoliant","Lactic 10% Resurfacer","PHA Gentle Peel","Salicylic 2% Clarifying Liquid","Enzyme Polish"],
+    Toner: ["Balancing Toner","Rice Essence","Soothing Green Tea Toner","BHA Pore Toner","Hydrating Mist"],
+    "Eye Cream": ["Caffeine Eye Gel","Ceramide Eye Cream","Peptide Eye Balm","Brightening Eye Serum","Cooling Eye Roll-On"],
+    Mask: ["Clay Detox Mask","Overnight Sleeping Mask","Hydrogel Sheet Mask","Brightening Wash-Off Mask","Calming Oat Mask"],
+    "Lip Care": ["Lip Butter Balm","SPF Lip Shield","Nourishing Lip Mask","Tinted Lip Balm","Ceramide Lip Treatment"],
+    "Body Lotion": ["Urea 5% Body Lotion","Shea Softening Lotion","Ceramide Body Milk","AHA Body Smoother","Lightweight Body Gel"],
+    "Hair Care": ["Nourish Shampoo","Scalp Care Shampoo","Bond Repair Conditioner","Leave-in Hair Serum","Heat Protect Spray"],
+    Primer: ["Pore Smoothing Primer","Hydrating Makeup Base","Matte Control Primer","Glow Enhancing Primer","Grip Primer"],
+    "Spot Treatment": ["BHA Spot Gel","Sulfur Treatment","Azelaic Rapid Gel","Cica Calming Gel","Retinoid Spot Serum"],
+  };
+  const descSeeds = [
+    "Lightweight texture; layers well under makeup.",
+    "Fragrance-free formula for sensitive skin.",
+    "Hydrates without heaviness; quick-absorbing finish.",
+    "Balances oil and shine through the day.",
+    "Brightens dullness for a fresh look.",
+    "Soothes redness; calms irritated skin.",
+    "Strengthens barrier; reduces tightness.",
+    "Leaves a soft, matte finish.",
+    "Packed with antioxidants for daily defense.",
+    "Smooth, non-sticky feel; everyday essential."
+  ];
+  const priceBands = { budget: [199, 699], mid: [700, 1499], upper: [1500, 2499] };
+  const ecoChance = (c)=> ["Sunscreen","Body Lotion","Cleanser","Moisturizer"].includes(c) ? 0.4 : 0.25;
+  const tagsPool = {
+    common: ["fragrance-free","non-comedogenic","dermatologist-tested","cruelty-free","vegan"],
+    Sunscreen: ["SPF50","PA+++","UVB/UVA","water-resistant","no white cast"],
+    Serum: ["vitamin C","niacinamide","hyaluronic acid","retinal","peptides"],
+    Cleanser: ["low pH","sulfate-free","foam","gel"],
+    Moisturizer: ["ceramides","glycerin","squalane","oil-free"],
+    Exfoliant: ["AHA","BHA","PHA","weekly"],
+  };
+  const [lo, hi] = budget >= 20000 ? priceBands.upper : budget >= 14000 ? priceBands.mid : priceBands.budget;
+  const brands = ["DermaSoft","HydraGlow","PureRoots","SkinLab","EverCare","AquaVeda","DailyFix","CalmSkin","BrightLab","Nutriskin"];
+
+  const items = [];
+  for(let i=0;i<30;i++){
+    const cat = cats[i % cats.length];
+    const name = `${pick(brands)} ${pick(nameSeeds[cat])}`;
+    const price = randInt(lo, hi);
+    const ecoFriendly = Math.random() < ecoChance(cat);
+    const desc = sentenceCap(pick(descSeeds));
+    const baseTags = (tagsPool[cat] || []).slice(0,2);
+    const plus = Math.random()<0.5 ? [pick(tagsPool.common)] : [];
+    const tags = [...baseTags, ...plus].filter(Boolean);
+    items.push({ name, price, description: desc, category: cat, ecoFriendly, tags });
+  }
+  return items;
+}
+
+// ---------- Glam: Start ----------
 app.post("/api/glam/start", async (req, res) => {
   try {
     const { gender = "Unisex", budgetInr } = req.body ?? {};
     const budget = Math.max(10000, Number(budgetInr) || 15000); // minimum ₹10,000
 
-    // Fallback list if model JSON fails (30 items)
-    let items = Array.from({ length: 30 }).map((_, i) => ({
-      name: `Starter Item ${i + 1}`,
-      price: Math.floor(250 + Math.random() * 1500),
-      description: "A practical everyday pick.",
-      category: ["Cleanser","Moisturizer","Sunscreen","Serum","Lip Care","Body","Hair","Mask","Toner","Eye Cream","Primer","Exfoliant"][i % 12],
-      ecoFriendly: i % 3 === 0,
-      tags: []
-    }));
+    // Start with rich synthetic fallback (realistic names)
+    let items = synthItems30(gender, budget);
 
-    try {
-      const raw = await chatCompletion(PROMPTS.glamSuggest({ gender, budgetInr: budget }), 0.5, 1800);
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.items) && parsed.items.length >= 20) {
-        items = parsed.items
-          .slice(0, 30)
-          .map(it => ({
-            name: String(it.name || "").slice(0, 80),
-            price: Math.max(50, Number(it.price) || 0),
-            description: String(it.description || "").slice(0, 120),
-            category: String(it.category || "Other").slice(0, 40),
+    // Try LLM (up to twice); sanitize and merge or keep synthetic
+    const tryLLM = async () => {
+      try {
+        const raw = await chatCompletion(PROMPTS.glamSuggest({ gender, budgetInr: budget }), 0.5, 2000);
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed?.items) || parsed.items.length < 20) return null;
+
+        const cleaned = parsed.items.slice(0, 30).map((it, i) => {
+          const name = String(it.name || "").trim();
+          const badName = !name || /starter item|sample product|basic|product\s*\d+/i.test(name);
+          return {
+            name: badName ? items[i]?.name || `Refined Item ${i+1}` : name.slice(0, 80),
+            price: Math.max(50, Number(it.price) || items[i]?.price || 399),
+            description: String(it.description || items[i]?.description || "Lightweight, everyday formula.").slice(0, 120),
+            category: String(it.category || items[i]?.category || "Other").slice(0, 40),
             ecoFriendly: !!it.ecoFriendly,
-            tags: Array.isArray(it.tags) ? it.tags.slice(0, 5).map(t => String(t).slice(0, 20)) : []
-          }));
-        // Pad to exactly 30 if model returned < 30
-        while (items.length < 30) {
-          items.push({
-            name: `Extra Item ${items.length + 1}`,
-            price: Math.floor(300 + Math.random() * 1200),
-            description: "Useful addition.",
-            category: "Other",
-            ecoFriendly: Math.random() < 0.3,
-            tags: []
-          });
-        }
-      }
-    } catch {
-      // keep fallback
+            tags: Array.isArray(it.tags) ? it.tags.slice(0,5).map(t=>String(t).slice(0,20)) : (items[i]?.tags || [])
+          };
+        });
+
+        while (cleaned.length < 30) cleaned.push(synthItems30(gender, budget)[0]);
+        return cleaned;
+      } catch { return null; }
+    };
+
+    const llm1 = await tryLLM();
+    if (llm1) items = llm1; else {
+      const llm2 = await tryLLM();
+      if (llm2) items = llm2;
     }
 
     const token = "GB" + Math.random().toString(36).slice(2, 10).toUpperCase();
@@ -816,6 +882,7 @@ app.post("/api/glam/start", async (req, res) => {
   }
 });
 
+// ---------- Glam: Score ----------
 app.post("/api/glam/score", async (req, res) => {
   try {
     const { token, selectedIndices, timeTaken } = req.body ?? {};
@@ -830,7 +897,7 @@ app.post("/api/glam/score", async (req, res) => {
     const total = selected.reduce((sum, it) => sum + Number(it.price || 0), 0);
     const secs = Math.max(0, Number(timeTaken) || 0);
 
-    // New minimum picks: 12
+    // If < 12 picks, auto-fail but provide structured response
     if (selected.length < 12) {
       sessions.delete(token);
       return res.json({
@@ -838,12 +905,12 @@ app.post("/api/glam/score", async (req, res) => {
         done: true,
         win: false,
         autoFinished: secs >= 180,
-        score: 0,
-        summary: "You must pick at least 12 products.",
+        score: Math.max(0, Math.min(60, Math.round(selected.length * 5))), // courtesy score
+        summary: "You must pick at least 12 products for a complete kit.",
         budgetInr: s.budgetInr,
         totalSpend: total,
         timeTaken: secs,
-        positives: [],
+        positives: selected.length ? ["Some useful picks made"] : [],
         negatives: ["Picked fewer than 12 products"]
       });
     }
@@ -869,7 +936,7 @@ app.post("/api/glam/score", async (req, res) => {
       scored.summary = "Fallback scoring applied.";
     }
 
-    // 🔒 Server-side budget guard (soft penalty + negative note)
+    // Server-side budget guard (soft penalty + negative note)
     const overBudget = total > s.budgetInr;
     if (overBudget) {
       scored.negatives = ['Total spend exceeded the budget', ...(scored.negatives || [])].slice(0,6);
@@ -892,7 +959,7 @@ app.post("/api/glam/score", async (req, res) => {
       timeTaken: secs,
       message: win
         ? `🎉 Great build! Score ${scored.score}/100`
-        : `😢 Failed! Try again. Score ${scored.sfcore}/100`
+        : `😢 Failed! Try again. Score ${scored.score}/100`
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
