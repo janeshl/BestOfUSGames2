@@ -363,7 +363,7 @@ function html(e,m){if(e)e.innerHTML=m}
       }
       set(
         (json.win
-          ? `🎉 Great guess! You matched within 60%.\n\n`
+          ? `🎉 Great guess! You Won.\n\n`
           : `❌ Not quite. Better luck next time!\n\n`)
         + `Your Guess: ${json.currency} ${json.playerGuess}\n`
         + `AI Price:  ${json.currency} ${json.aiPrice}\n\n`
