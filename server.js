@@ -193,7 +193,7 @@ JSON only.`,
   glamSuggest: ({ gender, budgetInr }) => [
     {
       role: "system",
-      content: `Suggest 30 skincare/beauty products appropriate for the specified gender (or unisex).
+      content: `Suggest 30 unique skincare/beauty products appropriate for the specified gender (or unisex).
 Rules:
 - Currency: INR
 - Each item price should be reasonable for Indian market; can vary widely but keep realistic.
@@ -892,7 +892,7 @@ app.post("/api/glam/score", async (req, res) => {
       timeTaken: secs,
       message: win
         ? `🎉 Great build! Score ${scored.score}/100`
-        : `❌ Try again. Score ${scored.score}/100`
+        : `😢 Failed! Try again. Score ${scored.sfcore}/100`
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
