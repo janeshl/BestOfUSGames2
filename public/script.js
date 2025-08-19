@@ -463,11 +463,11 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 // ===========================
-// 💄 Budget Glam Builder
+// 💄 Budget Glam Builder (enhanced)
 // ===========================
 (function () {
-  const form = document.querySelector('#glam-start');
-  if (!form) return;
+  const startForm = document.querySelector('#glam-start');
+  if (!startForm) return;
 
   // UI elements
   const hud        = document.querySelector('#glam-hud');
@@ -485,10 +485,9 @@ function html(e,m){if(e)e.innerHTML=m}
   const actions    = document.querySelector('#glam-actions');
   const finishBtn  = document.querySelector('#glam-finish');
 
-  // NEW review + generate
-  const reviewEl   = document.querySelector('#glam-review');       // added in HTML patch below
-  const reviewList = document.querySelector('#glam-review-list');  // added in HTML patch below
-  const genBtn     = document.querySelector('#glam-generate');     // added in HTML patch below
+  const reviewEl   = document.querySelector('#glam-review');
+  const reviewList = document.querySelector('#glam-review-list');
+  const genBtn     = document.querySelector('#glam-generate');
 
   const outEl      = document.querySelector('#glam-out');
 
@@ -502,14 +501,13 @@ function html(e,m){if(e)e.innerHTML=m}
   let timeLeft     = 180; // seconds
   let startedAt    = 0;
 
-  // Derived helpers
-  const visibleSlice = () => items.slice(page * 10, page * 10 + 10);
-  const selectedTotal = () =>
-    [...selected].reduce((sum, idx) => sum + (Number(items[idx]?.price) || 0), 0);
-
+  // Helpers
   function show(el) { el && el.classList.remove('hidden'); }
   function hide(el) { el && el.classList.add('hidden'); }
   function set(el, text) { if (el) el.textContent = text; }
+  const visibleSlice = () => items.slice(page * 10, page * 10 + 10);
+  const selectedTotal = () =>
+    [...selected].reduce((sum, idx) => sum + (Number(items[idx]?.price) || 0), 0);
 
   function updateHUD() {
     set(budgetEl, `Budget: ₹${budget}`);
@@ -535,7 +533,7 @@ function html(e,m){if(e)e.innerHTML=m}
       set(timerEl, `Time: ${timeLeft}s`);
       if (timeLeft <= 0) {
         clearTimer();
-        // Auto-finish: player fails if < 12; still send for scoring
+        // Auto-finish: show review and allow generating results.
         goToReview(true);
       }
     }, 1000);
@@ -550,7 +548,6 @@ function html(e,m){if(e)e.innerHTML=m}
       const d = document.createElement('div');
       d.className = 'option';
 
-      // bucket title style: show category as a small label
       const tags = Array.isArray(p.tags) ? p.tags : [];
       d.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
@@ -567,7 +564,7 @@ function html(e,m){if(e)e.innerHTML=m}
         </div>
       `;
 
-      // selected styling
+      // Selected styling
       if (selected.has(idx)) {
         d.style.background = 'rgba(80,200,120,.15)';
         d.style.borderColor = 'rgba(80,200,120,.5)';
@@ -577,13 +574,11 @@ function html(e,m){if(e)e.innerHTML=m}
       d.onclick = () => {
         const price = Number(items[idx]?.price) || 0;
         if (!selected.has(idx)) {
-          // Budget guard: block add if would exceed budget
+          // Budget guard: block add if it would exceed budget
           const newTotal = selectedTotal() + price;
           if (newTotal > budget) {
-            // light feedback
             d.style.animation = 'shake .25s';
             setTimeout(() => (d.style.animation = ''), 260);
-            // also show a small inline note
             outEl.style.display = 'block';
             outEl.textContent = `⚠️ Can't add "${items[idx].name}" — it would exceed your budget (₹${newTotal} > ₹${budget}).`;
             return;
@@ -592,29 +587,37 @@ function html(e,m){if(e)e.innerHTML=m}
         } else {
           selected.delete(idx);
         }
-        renderList(); // re-render to update highlight
+        renderList();
         updateHUD();
+        // hide any prior warning when user changes selection
+        if (outEl.textContent.startsWith('⚠️')) outEl.textContent = '';
       };
 
       listEl.appendChild(d);
     });
 
-    // Pager buttons visibility
+    // Pager visibility
     prevBtn.style.display = page > 0 ? 'inline-block' : 'none';
     nextBtn.style.display = (page + 1) * 10 < items.length ? 'inline-block' : 'none';
     updateHUD();
   }
 
   function goToReview(autoFinished) {
-    // Move to review UI (no navigation)
+    // Always hide the start form once the game runs (prevents “start section” from appearing on later pages)
+    hide(startForm);
+
     hide(actions);
     hide(pager);
     hide(listEl);
+    clearTimer();
 
+    show(hud);
     show(reviewEl);
-    reviewList.innerHTML = '';
+    show(genBtn);          // <-- ensure the Generate Results button is visible
+    outEl.style.display = 'block';
 
-    // Build selected list
+    // Build review list UI
+    reviewList.innerHTML = '';
     if (selected.size === 0) {
       const p = document.createElement('div');
       p.className = 'pill';
@@ -643,16 +646,11 @@ function html(e,m){if(e)e.innerHTML=m}
       });
     }
 
-    // Inform if auto-finished or <12 picks
-    outEl.style.display = 'block';
-    const msgParts = [];
-    if (autoFinished) msgParts.push('⏱ Time up — auto-finished with your current selections.');
-    if (selected.size < 12) msgParts.push('You picked fewer than 12 products; this will be marked as a fail.');
-    outEl.textContent = msgParts.join(' ') || 'Review your selections, then generate your results.';
-
-    // Keep HUD on screen
-    show(hud);
-    clearTimer();
+    // Messaging for auto-finish or too few picks
+    const msgs = [];
+    if (autoFinished) msgs.push('⏱ Time up — auto-finished with your current selections.');
+    if (selected.size < 12) msgs.push('You selected fewer than 12 products; this will be marked as a fail.');
+    outEl.textContent = msgs.join(' ') || 'Review your selections, then generate your results.';
   }
 
   async function generateResults() {
@@ -683,7 +681,7 @@ function html(e,m){if(e)e.innerHTML=m}
         return;
       }
 
-      // Build pretty results
+      // Build readable results
       const lines = [];
       lines.push(json.win ? `🎉 Great build! Score ${json.score}/100` : `😢 Failed. Score ${json.score}/100`);
       lines.push(`Budget: ₹${json.budgetInr}   •   Spend: ₹${json.totalSpend}   •   Time: ${json.timeTaken}s`);
@@ -698,25 +696,24 @@ function html(e,m){if(e)e.innerHTML=m}
         json.negatives.forEach(n => lines.push(` • ${n}`));
       }
 
-      // Per-product 1–2 sentence info
+      // Per-product info
       lines.push('\nYour picks:');
       [...selected].forEach((idx) => {
         const it = items[idx];
         const tagStr = (Array.isArray(it.tags) && it.tags.length) ? ` [${it.tags.join(', ')}]` : '';
         lines.push(` • ${it.name} — ₹${it.price}${tagStr}`);
-        // 1–2 sentence summary using what we have (name + description)
         lines.push(`   ${it.description}`);
       });
 
-      // Tips
+      // Skin tips
       lines.push('\nSkin protection tips:');
-      lines.push(' • Use broad-spectrum SPF 30+ every day, reapply every 2–3 hours outdoors.');
-      lines.push(' • Layer light to heavy: cleanser → treatment → moisturizer → sunscreen (AM).');
-      lines.push(' • Patch test new actives and avoid over-exfoliating to protect your skin barrier.');
+      lines.push(' • Use broad-spectrum SPF 30+ daily; reapply every 2–3 hours outdoors.');
+      lines.push(' • Layer light → heavy: cleanser → treatment → moisturizer → sunscreen (AM).');
+      lines.push(' • Patch test new actives; avoid over-exfoliating to protect the skin barrier.');
 
       outEl.textContent = lines.join('\n');
 
-      // Lock UI after results
+      // Lock Generate button after results
       hide(genBtn);
     } catch {
       outEl.textContent = 'Network error while generating results.';
@@ -731,7 +728,7 @@ function html(e,m){if(e)e.innerHTML=m}
     if ((page + 1) * 10 < items.length) { page++; renderList(); }
   });
 
-  // Finish -> go to review (allow <12 picks; will be fail in results)
+  // Finish -> Review (keep <12 picks allowed; will fail in scoring)
   finishBtn?.addEventListener('click', (e) => {
     e.preventDefault();
     goToReview(false);
@@ -744,18 +741,23 @@ function html(e,m){if(e)e.innerHTML=m}
   });
 
   // Start
-  form.addEventListener('submit', async (e) => {
+  startForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+
+    // Hide the start section immediately once the game begins
+    hide(startForm);
+
     outEl.style.display = 'block';
     outEl.textContent = 'Loading products...';
-    hide(reviewEl);
-    hide(genBtn);
+    show(hud);
     show(listEl);
     show(pager);
     show(actions);
+    hide(reviewEl);
+    hide(genBtn);
 
-    const gender = form.gender.value;
-    const b = Number(form.budget.value);
+    const gender = startForm.gender.value;
+    const b = Number(startForm.budget.value);
     try {
       const res = await fetch('/api/glam/start', {
         method: 'POST',
@@ -775,11 +777,18 @@ function html(e,m){if(e)e.innerHTML=m}
       outEl.textContent = '';
       outEl.style.display = 'none';
 
-      show(hud);
       renderList();
       startTimer();
     } catch {
       outEl.textContent = 'Network error. Please try again.';
+      // re-show start if failed to start
+      show(startForm);
+      hide(hud);
+      hide(listEl);
+      hide(pager);
+      hide(actions);
+      hide(reviewEl);
+      hide(genBtn);
     }
   });
 })();
