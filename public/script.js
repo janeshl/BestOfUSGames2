@@ -463,11 +463,9 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Budget Glam Builder — Bucketed list + 3 skin tips
-   - Group items by category, show name + 1-sentence description
-   - Auto-finish on timer (fail if <12)
-   - Early finish allowed (fail if <12)
-   - Over-budget guard
+   Budget Glam Builder — Bucketed list + tags + 3 skin tips
+   - Group items by category, show name + one-sentence description
+   - Budget guard; timer auto-finish; early finish allowed
 ======================== */
 (function(){
   const form = document.querySelector('#glam-start');
@@ -489,7 +487,7 @@ function html(e,m){if(e)e.innerHTML=m}
   const actionsRow = document.querySelector('#glam-actions');
   const finishBtn  = document.querySelector('#glam-finish');
 
-  // Review + Results sections (already in glam.html)
+  // Review + Results sections
   const reviewSec   = document.querySelector('#glam-review');
   const reviewMeta  = document.querySelector('#glam-review-meta');
   const reviewList  = document.querySelector('#glam-review-list');
@@ -549,21 +547,29 @@ function html(e,m){if(e)e.innerHTML=m}
     pageEl.textContent   = `Page: ${Math.min(page+1, totalPages)}`;
   }
 
-  // Helper: make a single sentence from product info
+  // One-sentence description
   function oneSentence(p){
     const desc = (p.description || '').trim();
     if(desc){
-      // First sentence only
       const m = desc.match(/[^.!?]+[.!?]?/);
       if(m) return m[0].trim().replace(/\s+/g,' ');
     }
-    // Fallback: generic line by category / eco tag
     const cat = (p.category || 'Product').toLowerCase();
     const eco = p.ecoFriendly ? ' Eco-friendly choice.' : '';
     return `A ${cat} suitable for everyday use.${eco}`.trim();
   }
 
-  // Render a bucketed page view (by category) with clickable items
+  // Tag chip line
+  function formatTags(p){
+    const tags = Array.isArray(p.tags) ? p.tags.map(t=>String(t).trim()).filter(Boolean) : [];
+    const base = [];
+    if (p.category) base.push(p.category);
+    if (p.ecoFriendly) base.push('Eco-Friendly');
+    const all = [...base, ...tags].filter(Boolean);
+    return all.length ? all.slice(0, 5).join(' · ') : '';
+  }
+
+  // Bucketed render
   function renderBucketed(container, indices, clickable=true){
     container.innerHTML = '';
     if(!indices.length){
@@ -571,7 +577,6 @@ function html(e,m){if(e)e.innerHTML=m}
       return;
     }
 
-    // Group by category
     const groups = {};
     for(const idx of indices){
       const p = items[idx];
@@ -580,13 +585,10 @@ function html(e,m){if(e)e.innerHTML=m}
       groups[cat].push(idx);
     }
 
-    // Deterministic category order: common first, then alpha
-    const preferred = ['Sunscreen','Cleanser','Moisturizer','Serum','Exfoliant','Toner','Eye Cream','Mask','Lip Care','Body','Hair','Primer','Spot Treatment','Other'];
+    const preferred = ['Sunscreen','Cleanser','Moisturizer','Serum','Exfoliant','Toner','Eye Cream','Mask','Lip Care','Body Lotion','Hair Care','Primer','Spot Treatment','Other'];
     const cats = Object.keys(groups).sort((a,b)=>{
       const ia = preferred.indexOf(a); const ib = preferred.indexOf(b);
-      if(ia !== -1 || ib !== -1){
-        return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-      }
+      if(ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
       return a.localeCompare(b);
     });
 
@@ -601,16 +603,19 @@ function html(e,m){if(e)e.innerHTML=m}
         const p = items[idx];
         const row = document.createElement('div');
         row.className = 'option';
-        row.style.whiteSpace = 'pre-wrap';
         row.style.cursor = clickable ? 'pointer' : 'default';
         row.style.background = selected.has(idx) && clickable ? 'rgba(80,200,120,.2)' : '';
 
-        // Name + price (first line)
         const line1 = `${p.name} — ₹${p.price}`;
-        // One-sentence description (second line)
         const line2 = oneSentence(p);
+        const tagLine = formatTags(p);
 
-        row.textContent = `${line1}\n${line2}`;
+        row.innerHTML = `
+          <div>${line1}</div>
+          <div style="opacity:.9">${line2}</div>
+          ${tagLine ? `<div class="badge" style="display:inline-block;margin-top:6px;">${tagLine}</div>` : ``}
+        `;
+
         if(clickable){
           row.onclick = ()=>{
             if(finishing) return;
@@ -642,7 +647,7 @@ function html(e,m){if(e)e.innerHTML=m}
     const end   = Math.min(items.length, start + perPage);
     const idxs  = [];
     for(let i=start; i<end; i++) idxs.push(i);
-    renderBucketed(listEl, idxs, /*clickable*/ true);
+    renderBucketed(listEl, idxs, true);
 
     prevBtn.disabled = page === 0 || finishing;
     nextBtn.disabled = end >= items.length || finishing;
@@ -650,28 +655,25 @@ function html(e,m){if(e)e.innerHTML=m}
     updateHUD();
   }
 
-  // Step 2: Review (if >=12 picks). If <12, go straight to results (fail).
+  // Review
   function goToReview(){
     clearTimer();
     if(selected.size < 12){
-      // Finish now even with <12 → immediate results (failed)
       generateResults(false);
       return;
     }
-
     finishing = true;
     hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
 
     const spend = currentSpend();
     reviewMeta.textContent = `You selected ${selected.size} items, Spend: ₹${spend} / Budget: ₹${budgetInr} | Time: ${180 - Math.max(0,timeLeft)}s`;
 
-    // Render selected items bucketed (not clickable)
     const chosen = Array.from(selected);
-    renderBucketed(reviewList, chosen, /*clickable*/ false);
+    renderBucketed(reviewList, chosen, false);
     show(reviewSec);
   }
 
-  // Build 3 skin tips (context aware)
+  // Skin tips
   function skinTips(selItems){
     const hasSPF = selItems.some(p => {
       const text = `${p.name} ${p.category} ${(p.tags||[]).join(' ')}`.toLowerCase();
@@ -687,14 +689,14 @@ function html(e,m){if(e)e.innerHTML=m}
     }
     return [
       "Reapply sunscreen every 2–3 hours, and after sweat or towel-dry.",
-      "Use the two-finger rule for adequate coverage; don't forget ears and neck.",
+      "Use the two-finger rule for adequate coverage; include ears and neck.",
       "Combine SPF with shade and sunglasses for best protection."
     ];
   }
 
-  // Step 3: Generate Results (server scoring)
+  // Results
   async function generateResults(autoTimed = false){
-    if(finishing && !autoTimed) return; // prevent accidental double calls
+    if(finishing && !autoTimed) return;
     finishing = true;
 
     hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow); hide(reviewSec);
@@ -721,11 +723,10 @@ function html(e,m){if(e)e.innerHTML=m}
       const selItems = Array.from(selected).map(i=>items[i]);
       const tips = skinTips(selItems);
 
-      // Summary block
       const pos = Array.isArray(json.positives) ? json.positives.slice(0,6) : [];
       const neg = Array.isArray(json.negatives) ? json.negatives.slice(0,6) : [];
       const lines = [];
-      lines.push(json.win ? '🎉 Great build!' : '❌ Run failed.');
+      lines.push(json.win ? '🎉 Great build!' : '❌ failed to build.');
       lines.push(`Score: ${json.score}/100`);
       if(json.summary) lines.push(json.summary);
       lines.push(`Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`);
@@ -737,23 +738,25 @@ function html(e,m){if(e)e.innerHTML=m}
         lines.push('\n⚠️ Points to improve:');
         neg.forEach((n,i)=>lines.push(`  ${i+1}. ${n}`));
       }
-      // 3 skin tips
       lines.push('\n🧴 Skin Protection Tips:');
       tips.forEach((t,i)=> lines.push(`  ${i+1}. ${t}`));
       outEl.textContent = lines.join('\n');
 
-      // Two-sentence blurb per product (keep)
+      // Product blurbs
       detailList.innerHTML = '';
       selItems.forEach((p) => {
         const div = document.createElement('div');
         div.className = 'option';
-        const tags = [...(p.tags||[]), p.category].filter(Boolean).slice(0,4);
-        const tagTxt = tags.length ? ` [${tags.join(' · ')}]` : '';
-        const s1 = `${p.name}${tagTxt} — ₹${p.price}.`;
+        const tagsTxt = formatTags(p);
+        const s1 = `${p.name} — ₹${p.price}.`;
         const s2 = (p.description && p.description.trim().length)
           ? `${oneSentence(p)}`
           : `Useful addition to round out your routine.`;
-        div.textContent = `${s1} ${s2}`;
+        div.innerHTML = `
+          <div>${s1}</div>
+          <div style="opacity:.9">${s2}</div>
+          ${tagsTxt ? `<div class="badge" style="display:inline-block;margin-top:6px;">${tagsTxt}</div>` : ``}
+        `;
         detailList.appendChild(div);
       });
     }catch{
@@ -764,13 +767,13 @@ function html(e,m){if(e)e.innerHTML=m}
   prevBtn.addEventListener('click', ()=>{ if(page>0 && !finishing){ page--; renderPage(); } });
   nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length && !finishing){ page++; renderPage(); } });
 
-  // Allow finishing before 12 picks — marked failed by server/results
+  // Finish Now: allow <12 (immediate results -> fail), otherwise go to review
   finishBtn.addEventListener('click', (e)=>{
     e.preventDefault();
     if(selected.size < 12){
-      generateResults(false); // immediate results (failed)
+      generateResults(false);
     } else {
-      goToReview();           // review first if valid
+      goToReview();
     }
   });
 
@@ -780,7 +783,6 @@ function html(e,m){if(e)e.innerHTML=m}
     e.preventDefault();
     finishing = false;
 
-    // Reset screens
     hide(reviewSec); hide(resultsSec);
     outEl.textContent = ''; detailList.innerHTML = '';
     listEl.textContent = 'Loading...';
@@ -788,7 +790,6 @@ function html(e,m){if(e)e.innerHTML=m}
     const gender = form.gender.value;
     const budget = Number(form.budget.value);
 
-    // Hide the form once game starts
     form.style.display = 'none';
 
     try{
