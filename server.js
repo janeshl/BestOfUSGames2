@@ -432,7 +432,7 @@ app.post("/api/character/start", async (req, res) => {
     res.json({
       ok: true,
       sessionId: id,
-      message: "Ask yes/no questions about the secret HARD character. You have 10 rounds. Natural guesses are accepted.",
+      message: "Ask questions about the secret Person/Character. You have 10 rounds. Natural guesses are accepted.",
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -565,25 +565,46 @@ app.post("/api/healthy/plan", async (req, res) => {
 });
 
 /* ========================
-   Game 5: Future Price Prediction
+   Game 5: Future Price Prediction  (Hardened)
 ======================== */
+function safeParseJSON(raw, fallback) {
+  try { return JSON.parse(raw); } catch { return fallback; }
+}
+function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, n)); }
+
 app.post("/api/fpp/start", async (req, res) => {
   try {
     const { category } = req.body ?? {};
-    // 1) Get product + current price
+
+    // 1) Product + current price (robust fallback)
     let suggestion = {
       product: "Wireless Earbuds",
       price: 3999,
       currency: "INR",
       reason: "Popular mid-range pick",
     };
+
     try {
       const raw = await chatCompletion(PROMPTS.priceProduct(category), 0.6, 260);
-      const parsed = JSON.parse(raw);
-      if (parsed?.product && parsed?.price && parsed?.currency) suggestion = parsed;
-    } catch {}
+      const parsed = safeParseJSON(raw, null);
+      if (parsed && parsed.product && parsed.price && parsed.currency) {
+        suggestion = {
+          product: String(parsed.product).slice(0, 80),
+          price: Number(parsed.price) || 0,
+          currency: String(parsed.currency).toUpperCase(),
+          reason: String(parsed.reason || "Popular pick").slice(0, 120),
+        };
+      }
+    } catch {
+      // keep local fallback
+    }
 
-    // 2) Get 10 yes/no questions
+    // fallback if price is unusable
+    if (!Number.isFinite(suggestion.price) || suggestion.price <= 0) {
+      suggestion.price = suggestion.currency === "INR" ? 1999 : 49;
+    }
+
+    // 2) Ten yes/no questions (robust fallback)
     let questions = [
       "Will new features significantly improve this product in 5 years?",
       "Will raw material costs rise substantially?",
@@ -598,10 +619,13 @@ app.post("/api/fpp/start", async (req, res) => {
     ];
     try {
       const rawQ = await chatCompletion(PROMPTS.priceQuestions(suggestion.product), 0.4, 320);
-      const parsedQ = JSON.parse(rawQ);
-      if (Array.isArray(parsedQ?.questions) && parsedQ.questions.length === 10)
-        questions = parsedQ.questions;
-    } catch {}
+      const parsedQ = safeParseJSON(rawQ, null);
+      if (Array.isArray(parsedQ?.questions) && parsedQ.questions.length === 10) {
+        questions = parsedQ.questions.map(q => String(q).slice(0, 140));
+      }
+    } catch {
+      // keep fallback
+    }
 
     const token = "FP" + Math.random().toString(36).slice(2, 10).toUpperCase();
     sessions.set(token, {
@@ -613,6 +637,7 @@ app.post("/api/fpp/start", async (req, res) => {
       answers: [],
       predictedPrice: null,
       explanation: "",
+      createdAt: Date.now(),
     });
 
     res.json({
@@ -639,13 +664,16 @@ app.post("/api/fpp/answers", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Send an array of 10 booleans for answers." });
     }
 
-    s.answers = answers.map((a) => !!a);
+    s.answers = answers.map(a => !!a);
     const qa = s.questions.map((q, i) => ({ q, a: s.answers[i] }));
 
+    // Default predicted price if model fails
+    const base = s.currentPrice > 0 ? s.currentPrice : (s.currency === "INR" ? 1999 : 49);
     let predicted = {
-      predictedPrice: Math.max(1, s.currentPrice * 1.2),
-      explanation: "Baseline estimate with modest growth.",
+      predictedPrice: Math.round(base * 1.2),
+      explanation: "Baseline estimate with modest growth given mixed conditions.",
     };
+
     try {
       const raw = await chatCompletion(
         PROMPTS.priceForecast({
@@ -655,19 +683,30 @@ app.post("/api/fpp/answers", async (req, res) => {
           qa,
         }),
         0.5,
-        600
+        640
       );
-      const parsed = JSON.parse(raw);
-      if (typeof parsed?.predictedPrice === "number" && isFinite(parsed.predictedPrice)) {
-        predicted.predictedPrice = parsed.predictedPrice;
+      const parsed = safeParseJSON(raw, null);
+
+      let aiPrice = Number(parsed?.predictedPrice);
+      if (!Number.isFinite(aiPrice) || aiPrice <= 0) {
+        aiPrice = predicted.predictedPrice;
       }
-      if (typeof parsed?.explanation === "string") {
-        predicted.explanation = parsed.explanation;
+
+      // Clamp AI price to a sane range vs current (0.25× to 4×)
+      const lo = Math.max(1, Math.round(base * 0.25));
+      const hi = Math.max(lo + 1, Math.round(base * 4));
+      aiPrice = clamp(Math.round(aiPrice), lo, hi);
+
+      predicted.predictedPrice = aiPrice;
+      if (typeof parsed?.explanation === "string" && parsed.explanation.trim()) {
+        predicted.explanation = parsed.explanation.trim().slice(0, 400);
       }
-    } catch {}
+    } catch {
+      // keep baseline
+    }
 
     s.predictedPrice = Number(predicted.predictedPrice);
-    s.explanation = predicted.explanation || "";
+    s.explanation = predicted.explanation;
 
     res.json({ ok: true });
   } catch (e) {
@@ -675,30 +714,35 @@ app.post("/api/fpp/answers", async (req, res) => {
   }
 });
 
-// Reveal AI price after player's guess
+// Reveal AI price after player's guess (robust)
 app.post("/api/fpp/guess", (req, res) => {
   try {
     const { token, guess } = req.body ?? {};
     const s = sessions.get(token);
     if (!s || s.type !== "fpp")
       return res.status(400).json({ ok: false, error: "Session not found/expired." });
-    if (typeof s.predictedPrice !== "number" || !isFinite(s.predictedPrice)) {
-      return res.status(400).json({ ok: false, error: "Prediction not ready." });
+
+    let ai = Number(s.predictedPrice);
+    if (!Number.isFinite(ai) || ai <= 0) {
+      // As a last resort, derive from current price
+      const base = s.currentPrice > 0 ? s.currentPrice : (s.currency === "INR" ? 1999 : 49);
+      ai = Math.round(base * 1.2);
     }
+
     const playerGuess = Number(guess);
-    if (!isFinite(playerGuess)) {
+    if (!Number.isFinite(playerGuess)) {
       return res.status(400).json({ ok: false, error: "Invalid guess." });
     }
 
-    const ai = s.predictedPrice;
     const win = Math.abs(playerGuess - ai) <= 0.6 * ai; // within 60%
+
     const payload = {
       ok: true,
       win,
       currency: s.currency,
       playerGuess,
       aiPrice: ai,
-      explanation: s.explanation,
+      explanation: s.explanation || "Playful estimate based on scenarios.",
       product: s.product,
       currentPrice: s.currentPrice,
     };
