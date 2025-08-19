@@ -274,7 +274,7 @@ JSON only.`,
     {
       role: "system",
       content:
-`You create fair, original riddles (no copyrighted lines), non-repetitive.
+`You create fair, funny, original riddles (no copyrighted lines), non-repetitive.
 Return STRICT JSON only:
 {
   "riddles": [
@@ -1014,112 +1014,7 @@ app.post("/api/glam/score", async (req, res) => {
   }
 });
 
-/* ========================
-   Riddle Quest (5 rounds, AI-generated, no repeats; 1 hint per round; win if score>=4)
-======================== */
-
-// Start a new riddle game
-app.post("/api/riddle/start", async (req, res) => {
-  try {
-    const { theme } = req.body ?? {};
-    const banned = Array.from(recentRiddleTexts.values());
-
-    // Ask AI for 5 unique riddles
-    let pack = { riddles: [] };
-    try {
-      const raw = await chatCompletion(PROMPTS.riddlePack({ theme, banned }), 0.4, 1200);
-      pack = JSON.parse(raw);
-    } catch {
-      // fall back to an empty list; we'll guard below
-      pack = { riddles: [] };
-    }
-
-    // Validate & sanitize
-    const unique = [];
-    const seen = new Set();
-    (Array.isArray(pack.riddles) ? pack.riddles : []).forEach(r => {
-      const text = String(r?.text || "").trim();
-      const low = text.toLowerCase();
-      if (!text || text.length > 200) return;
-      if (seen.has(low) || recentRiddleTexts.has(low)) return;
-      const answers = Array.isArray(r?.answers)
-        ? r.answers
-            .map(a => String(a || "").toLowerCase().trim())
-            .filter(a => a && a.length <= 40)
-        : [];
-      if (!answers.length) return;
-      unique.push({
-        text,
-        answers,
-        hint: String(r?.hint || "").slice(0, 80),
-        explanation: String(r?.explanation || "").slice(0, 160),
-      });
-      seen.add(low);
-    });
-
-    // If AI failed to deliver 5, pad with safe defaults
-    while (unique.length < 5) {
-      const idx = unique.length + 1;
-      unique.push({
-        text: `Fallback riddle #${idx}: What gets wetter the more it dries?`,
-        answers: ["towel"],
-        hint: "Bathroom item.",
-        explanation: "A towel dries you while becoming wetter.",
-      });
-    }
-
-    // Record into recent to reduce future repeats across sessions
-    unique.forEach(r => pushRecentRiddle(r.text));
-
-    // Create session
-    const token = "RQ" + Math.random().toString(36).slice(2, 10).toUpperCase();
-    sessions.set(token, {
-      type: "riddle",
-      idx: 0,
-      score: 0,
-      usedHintForRound: false,     // reset each round
-      rounds: unique,              // [{ text, answers[], hint, explanation }]
-      createdAt: Date.now(),
-    });
-
-    // First round out
-    res.json({
-      ok: true,
-      token,
-      idx: 1,
-      total: 5,
-      score: 0,
-      hintUsed: false,
-      riddle: unique[0].text,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Get a hint (allowed once per current round)
-app.post("/api/riddle/hint", (req, res) => {
-  try {
-    const { token } = req.body ?? {};
-    const s = sessions.get(token);
-    if (!s || s.type !== "riddle")
-      return res.status(400).json({ ok: false, error: "Session not found/expired." });
-
-    const round = s.rounds[s.idx];
-    if (!round) return res.status(400).json({ ok: false, error: "Round not found." });
-
-    if (s.usedHintForRound) {
-      return res.json({ ok: false, error: "Hint already used for this riddle." });
-    }
-
-    s.usedHintForRound = true;
-    res.json({ ok: true, hint: round.hint || "No hint available." });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Submit an answer (or skip by sending guess="__SKIP__")
+// ===== REPLACE your existing /api/riddle/answer endpoint with this =====
 app.post("/api/riddle/answer", (req, res) => {
   try {
     const { token, guess } = req.body ?? {};
@@ -1130,17 +1025,24 @@ app.post("/api/riddle/answer", (req, res) => {
     const round = s.rounds[s.idx];
     if (!round) return res.status(400).json({ ok: false, error: "Round not found." });
 
+    const correctAnswer = String(round.answers?.[0] || "").trim();
     let correct = false;
+
     if (guess !== "__SKIP__") {
-      const g = normalizeAnswer(guess);
-      for (const a of round.answers) {
-        if (normalizeAnswer(a) === g) { correct = true; break; }
+      const norm = (x) => String(x || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "");
+      const g = norm(guess);
+      for (const a of (round.answers || [])) {
+        if (norm(a) === g) { correct = true; break; }
       }
     }
 
     if (correct) s.score += 1;
 
-    // advance
+    // Build a unified explanation that always reveals the answer.
+    const explanationOut =
+      `Answer: ${correctAnswer || "(n/a)"}${round.explanation ? `. ${round.explanation}` : ""}`;
+
+    // advance to next round
     s.idx += 1;
     s.usedHintForRound = false; // reset hint for next round
 
@@ -1154,9 +1056,8 @@ app.post("/api/riddle/answer", (req, res) => {
         score: s.score,
         total: 5,
         win,
-        explanation: correct
-          ? (round.explanation || "")
-          : (`Answer: ${round.answers[0]}. ${round.explanation || ""}`)
+        correct,
+        explanation: explanationOut
       });
     }
 
@@ -1165,9 +1066,7 @@ app.post("/api/riddle/answer", (req, res) => {
       ok: true,
       done: false,
       correct,
-      explanation: correct
-        ? (round.explanation || "")
-        : (guess === "__SKIP__" ? `Skipped. Answer: ${round.answers[0]}` : ""),
+      explanation: explanationOut,
       next: {
         token,
         idx: s.idx + 1,
