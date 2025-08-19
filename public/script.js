@@ -231,6 +231,155 @@ function html(e,m){if(e)e.innerHTML=m}
   }
 })();
 
+// Future Price Prediction (hardened flow)
+(function(){
+  const card = document.getElementById('fpp-card');
+  if(!card) return;
+
+  const startForm   = document.getElementById('fpp-start');
+  const intro       = document.getElementById('fpp-intro');
+  const qaWrap      = document.getElementById('fpp-qa');
+  const status      = document.getElementById('fpp-status');
+  const qEl         = document.getElementById('fpp-question');
+  const yesBtn      = document.getElementById('fpp-yes');
+  const noBtn       = document.getElementById('fpp-no');
+  const actions     = document.getElementById('fpp-actions');
+  const genBtn      = document.getElementById('fpp-generate');
+  const guessWrap   = document.getElementById('fpp-guess-wrap');
+  const guessInput  = document.getElementById('fpp-guess');
+  const submitGuess = document.getElementById('fpp-submit-guess');
+  const out         = document.getElementById('fpp-out');
+
+  let token = null;
+  let product = null;
+  let currency = null;
+  let currentPrice = null;
+  let questions = [];
+  let ix = 0;
+  let busy = false;
+  const answers = new Array(10).fill(false);
+
+  function show(el){ if(el) el.classList.remove('hidden'); }
+  function hide(el){ if(el) el.classList.add('hidden'); }
+  function set(txt){ if(out) out.textContent = txt; }
+  function guard() { return token && Array.isArray(questions) && questions.length === 10; }
+
+  function renderQuestion(){
+    status.textContent = `Question ${ix+1} of 10`;
+    qEl.textContent = questions[ix] || '';
+  }
+
+  startForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    busy = true;
+    set('');
+    const category = startForm.category.value.trim();
+    try{
+      const res = await fetch('/api/fpp/start', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ category: category || undefined })
+      });
+      const json = await res.json();
+      if(!json.ok){
+        set('Error: ' + (json.error || 'Unknown error'));
+        busy = false; return;
+      }
+      token = json.token;
+      product = json.product;
+      currency = json.currency;
+      currentPrice = json.currentPrice;
+      questions = Array.isArray(json.questions) ? json.questions.slice(0,10) : [];
+
+      intro.style.display = 'block';
+      intro.textContent = `Product: ${product} — Current Price: ${currency} ${currentPrice}`;
+
+      ix = 0;
+      show(qaWrap); hide(actions); hide(guessWrap);
+      renderQuestion();
+    }catch{
+      set('Network error. Please try again.');
+    } finally {
+      busy = false;
+    }
+  });
+
+  function answer(val){
+    if (!guard()) { set('Session not ready. Please start again.'); return; }
+    answers[ix] = !!val;
+    ix += 1;
+    if(ix < 10){
+      renderQuestion();
+    }else{
+      hide(qaWrap);
+      show(actions);
+    }
+  }
+
+  yesBtn?.addEventListener('click', ()=> answer(true));
+  noBtn ?.addEventListener('click', ()=> answer(false));
+
+  genBtn?.addEventListener('click', async ()=>{
+    if (busy) return;
+    if (!guard()) { set('Session not ready. Please start again.'); return; }
+    busy = true;
+    set('💹 Preparing the 5-year scenario...');
+    try{
+      const res = await fetch('/api/fpp/answers', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token, answers })
+      });
+      const json = await res.json();
+      if(!json.ok){
+        set('Error: ' + (json.error || 'Unknown error'));
+        busy = false; return;
+      }
+      set(`All set. Now enter your 5-year price guess for ${product}.`);
+      show(guessWrap);
+    }catch{
+      set('Network error. Please try again.');
+    } finally {
+      busy = false;
+    }
+  });
+
+  submitGuess?.addEventListener('click', async ()=>{
+    if (busy) return;
+    if (!guard()) { set('Session not ready. Please start again.'); return; }
+    const g = Number(guessInput.value);
+    if(!Number.isFinite(g)){ set('Please enter a numeric guess.'); return; }
+    busy = true;
+    set('🔢 Checking your guess...');
+    try{
+      const res = await fetch('/api/fpp/guess', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token, guess: g })
+      });
+      const json = await res.json();
+      if(!json.ok){
+        set('Error: ' + (json.error || 'Unknown error'));
+        busy = false; return;
+      }
+      set(
+        (json.win
+          ? `🎉 Great guess! You matched within 60%.\n\n`
+          : `❌ Not quite. Better luck next time!\n\n`)
+        + `Your Guess: ${json.currency} ${json.playerGuess}\n`
+        + `AI Price:  ${json.currency} ${json.aiPrice}\n\n`
+        + (json.explanation || '')
+      );
+      guessInput.value = '';
+      // Invalidate token after result (server deletes on success)
+      token = null;
+    }catch{
+      set('Network error. Please try again.');
+    } finally {
+      busy = false;
+    }
+  });
+})();
+
 /* ========================
    Healthy Diet
 ======================== */
