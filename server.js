@@ -734,7 +734,7 @@ app.post("/api/fpp/guess", (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid guess." });
     }
 
-    const win = Math.abs(playerGuess - ai) <= 0.6 * ai; // within 60%
+    const win = Math.abs(playerGuess - ai) <= 0.75 * ai; // within 60%
 
     const payload = {
       ok: true,
