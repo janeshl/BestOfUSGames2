@@ -1,65 +1,71 @@
 <!DOCTYPE html>
 <html lang="en"><head>
-<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Budget Glam Builder</title>
-<link rel="stylesheet" href="styling.css"/></head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>💄 Budget Glam Builder</title>
+  <link rel="stylesheet" href="styling.css"/>
+</head>
 <body class="container">
-<h2 class="section-title">💄 Budget Glam Builder</h2>
-<article class="card" id="glam-card">
-  <!-- Start form -->
-  <form id="glam-start" class="game-form" autocomplete="off">
-    <div class="row">
-      <select name="gender" required>
-        <option value="Unisex" selected>Unisex</option>
-        <option>Female</option>
-        <option>Male</option>
-      </select>
-      <input name="budget" placeholder="Budget in INR (min 10000, e.g., 15000)" required inputmode="numeric" />
+  <h2 class="section-title">💄 Budget Glam Builder</h2>
+
+  <article class="card" id="glam-card">
+    <!-- Start -->
+    <form id="glam-start" class="game-form" autocomplete="off">
+      <div class="row">
+        <select name="gender" required>
+          <option value="Unisex" selected>Unisex</option>
+          <option>Female</option>
+          <option>Male</option>
+        </select>
+        <input name="budget" placeholder="Budget in INR (min 10000, e.g., 15000)" required inputmode="numeric" />
+      </div>
+      <button class="btn" type="submit"><span>Start</span></button>
+    </form>
+
+    <!-- HUD -->
+    <div id="glam-hud" class="hidden" style="margin-top:10px">
+      <div class="badge" id="glam-timer">Time: 180s</div>
+      <div class="badge" id="glam-budget">Budget: ₹0</div>
+      <div class="badge" id="glam-spend">Spend: ₹0</div>
+      <div class="badge" id="glam-count">Selected: 0/12</div>
+      <div class="badge" id="glam-page">Page: 1</div>
     </div>
-    <button class="btn" type="submit"><span>Start</span></button>
-  </form>
 
-  <!-- HUD + list (Game screen) -->
-  <div id="glam-hud" class="hidden" style="margin-top:10px">
-    <div class="badge" id="glam-timer">Time: 180s</div>
-    <div class="badge" id="glam-budget">Budget: ₹0</div>
-    <div class="badge" id="glam-spend">Spend: ₹0</div>
-    <div class="badge" id="glam-count">Selected: 0/12</div>
-    <div class="badge" id="glam-page">Page: 1</div>
-  </div>
+    <!-- Toast -->
+    <div id="glam-toast" class="pill hidden" style="margin-top:10px;"></div>
 
-  <div id="glam-toast" class="pill hidden" style="margin-top:8px"></div>
+    <!-- Bucketed list -->
+    <div id="glam-list" class="list hidden" style="margin-top:10px"></div>
 
-  <div id="glam-list" class="list hidden" style="margin-top:10px"></div>
-
-  <div class="row hidden" id="glam-pager" style="margin-top:10px">
-    <button id="glam-prev" class="btn" type="button"><span>Prev</span></button>
-    <button id="glam-next" class="btn" type="button"><span>Next</span></button>
-  </div>
-
-  <div id="glam-actions" class="hidden" style="margin-top:12px">
-    <!-- behaves like submit but stays on-site -->
-    <button id="glam-finish" class="btn" type="button"><span>Finish Now</span></button>
-  </div>
-
-  <!-- Review screen (Step 2) -->
-  <section id="glam-review" class="hidden" style="margin-top:12px">
-    <h3 class="section-title" style="margin-bottom:8px">Review Your Selection</h3>
-    <div id="glam-review-meta" class="badge"></div>
-    <div id="glam-review-list" class="list" style="margin-top:8px"></div>
-    <div class="row" style="margin-top:12px">
-      <button id="glam-generate" class="btn" type="button"><span>Generate Results</span></button>
+    <!-- Pager -->
+    <div class="row hidden" id="glam-pager" style="margin-top:10px">
+      <button id="glam-prev" class="btn" type="button"><span>Prev</span></button>
+      <button id="glam-next" class="btn" type="button"><span>Next</span></button>
     </div>
-  </section>
 
-  <!-- Results screen (Step 3) -->
-  <section id="glam-results" class="hidden" style="margin-top:12px">
-    <pre id="glam-out" class="result" style="margin-top:0;"></pre>
-    <h3 class="section-title" style="margin:12px 0 8px">Your Products</h3>
-    <div id="glam-detail" class="list"></div>
-  </section>
-</article>
+    <!-- Actions -->
+    <div id="glam-actions" class="hidden" style="margin-top:12px">
+      <button id="glam-finish" class="btn" type="button"><span>Finish Now</span></button>
+    </div>
 
-<div style="margin-top:24px"><a class="back" href="./games.html">← Back</a></div>
-<script src="script.js"></script>
-</body></html>
+    <!-- Review page -->
+    <section id="glam-review" class="hidden" style="margin-top:16px;">
+      <div class="card-copy" id="glam-review-meta"></div>
+      <div class="list" id="glam-review-list" style="margin-top:8px;"></div>
+      <div style="margin-top:12px;">
+        <button id="glam-generate" class="btn" type="button"><span>Generate Results</span></button>
+      </div>
+    </section>
+
+    <!-- Results page -->
+    <section id="glam-results" class="hidden" style="margin-top:16px;">
+      <pre id="glam-out" class="result" style="white-space:pre-wrap;"></pre>
+      <h4 class="section-title" style="margin-top:12px;">Your Products</h4>
+      <div class="list" id="glam-detail"></div>
+    </section>
+  </article>
+
+  <div style="margin-top:24px"><a class="back" href="./games.html">← Back</a></div>
+  <script src="script.js"></script>
+</body>
+</html>
