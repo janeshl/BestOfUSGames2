@@ -49,7 +49,7 @@ Favorite place: ${favoritePlace}`,
     {
       role: "system",
       content:
-        `Create a 5-question **hard** multiple-choice quiz for the topic.
+        `Create a 5-question Very **hard** multiple-choice quiz for the topic.
 Rules:
 - EXACTLY 5 questions.
 - EACH question has EXACTLY 4 options.
@@ -382,7 +382,7 @@ app.post("/api/quiz/answer", (req, res) => {
         message:
           s.score >= 4
             ? `🎉 Winner! You scored ${s.score}/5`
-            : `❌ Try again. You scored ${s.score}/5`,
+            : `😢 Failed! You scored ${s.score}/5`,
       });
     }
     const next = s.questions[s.idx];
@@ -432,7 +432,7 @@ app.post("/api/character/start", async (req, res) => {
     res.json({
       ok: true,
       sessionId: id,
-      message: "Ask questions about the secret Person/Character. You have 10 rounds. Natural guesses are accepted.",
+      message: "Ask questions about the ecret Person/Character. You have 10 rounds. Natural guesses are accepted.",
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -478,7 +478,7 @@ app.post("/api/character/turn", async (req, res) => {
 
     // Out of rounds?
     if (s.rounds >= 10) {
-      const reveal = `Out of rounds! The character was: ${s.name}.`;
+      const reveal = `Sorry Out of rounds! The character was: ${s.name}.`;
       sessions.delete(sessionId);
       return res.json({
         ok: true,
