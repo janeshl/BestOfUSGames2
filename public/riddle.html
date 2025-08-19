@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>🧠 Riddle Quest</title>
+  <link rel="stylesheet" href="styling.css" />
+</head>
+<body class="container">
+  <h2 class="section-title">🧩 Riddle Quest</h2>
+
+  <article class="card">
+    <form id="riddle-start" class="game-form" autocomplete="off">
+      <input name="theme" placeholder="Optional theme (e.g., Nature, Objects, Tech)" autocomplete="off" autocapitalize="none" spellcheck="false"/>
+      <button class="btn" type="submit"><span>Start</span></button>
+    </form>
+
+    <div id="riddle-area" style="display:none; margin-top:10px;">
+      <div class="row" style="gap:8px; flex-wrap:wrap;">
+        <div class="badge" id="riddle-status">Riddle 1 of 5</div>
+        <div class="badge" id="riddle-score">Score: 0</div>
+        <div class="badge" id="riddle-hint-badge">Hint: available</div>
+      </div>
+
+      <div id="riddle-text" class="card-copy" style="margin:10px 0 8px; white-space:pre-wrap;"></div>
+
+      <form id="riddle-answer-form" class="game-form" autocomplete="off" style="margin-top:8px">
+        <input id="riddle-guess" placeholder="Your answer..." required autocomplete="off" autocapitalize="none" spellcheck="false"/>
+        <div class="row" style="gap:8px; flex-wrap:wrap;">
+          <button class="btn" type="submit"><span>Submit</span></button>
+          <button class="btn" id="riddle-hint-btn" type="button"><span>Use Hint</span></button>
+          <button class="btn" id="riddle-skip-btn" type="button"><span>Skip</span></button>
+        </div>
+      </form>
+
+      <pre id="riddle-feedback" class="result" style="margin-top:10px; display:none;"></pre>
+    </div>
+  </article>
+
+  <div style="margin-top:24px;display:flex;justify-content:flex-start;">
+    <a class="back" href="./games.html">← Back</a>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
