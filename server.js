@@ -22,22 +22,6 @@ app.use("/api/", rateLimit({ windowMs: 60 * 1000, max: 30 }));
 const sessions = new Map();
 const recentByTopic = new Map();        // Character game: avoid repeats per topic (last 5)
 const recentQuizByTopic = new Map();    // Quiz game: avoid repeating questions per topic (keep last 50 Qs)
-// --- Riddle Quest memory (avoid repeats across sessions) ---
-const recentRiddleTexts = new Set(); // store last ~100 riddle texts
-
-function pushRecentRiddle(text) {
-  recentRiddleTexts.add(text.toLowerCase());
-  // keep size in check
-  if (recentRiddleTexts.size > 100) {
-    const first = recentRiddleTexts.values().next().value;
-    recentRiddleTexts.delete(first);
-  }
-}
-
-function normalizeAnswer(s) {
-  return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '');
-}
-
 const makeId = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10);
 
 /* ------------------------
@@ -268,38 +252,6 @@ ${selected.map((it, i) => `#${i + 1} ${it.name} — ₹${it.price} — ${it.cate
 TotalSpend: ₹${selected.reduce((s, x) => s + Number(x.price || 0), 0)}
 JSON only.`,
     },
-  ],
-  // --- Riddle Quest: generate 5 unique riddles as strict JSON ---
-  riddlePack: ({ theme, banned }) => [
-    {
-      role: "system",
-      content:
-`You create fair, funny, original riddles (no copyrighted lines), non-repetitive.
-Return STRICT JSON only:
-{
-  "riddles": [
-    {
-      "text": string,                 // <= 140 chars
-      "answers": string[],            // 3-6 accepted answers, lowercase
-      "hint": string,                 // <= 10 words
-      "explanation": string           // <= 20 words
-    } x5
-  ]
-}
-Rules:
-- EXACTLY 5 riddles.
-- All different from each other and from banned list (case-insensitive).
-- Keep answers short, common, and lowercase (e.g., "keyboard", "river").`
-    },
-    {
-      role: "user",
-      content:
-`Theme (optional): ${theme || "general"}
-Avoid riddles containing any of these texts (case-insensitive):
-${(banned || []).join("\n") || "(none)"}
-
-JSON only.`
-    }
   ],
 };
 
@@ -1013,74 +965,6 @@ app.post("/api/glam/score", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-// ===== REPLACE your existing /api/riddle/answer endpoint with this =====
-app.post("/api/riddle/answer", (req, res) => {
-  try {
-    const { token, guess } = req.body ?? {};
-    const s = sessions.get(token);
-    if (!s || s.type !== "riddle")
-      return res.status(400).json({ ok: false, error: "Session not found/expired." });
-
-    const round = s.rounds[s.idx];
-    if (!round) return res.status(400).json({ ok: false, error: "Round not found." });
-
-    const correctAnswer = String(round.answers?.[0] || "").trim();
-    let correct = false;
-
-    if (guess !== "__SKIP__") {
-      const norm = (x) => String(x || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "");
-      const g = norm(guess);
-      for (const a of (round.answers || [])) {
-        if (norm(a) === g) { correct = true; break; }
-      }
-    }
-
-    if (correct) s.score += 1;
-
-    // Build a unified explanation that always reveals the answer.
-    const explanationOut =
-      `Answer: ${correctAnswer || "(n/a)"}${round.explanation ? `. ${round.explanation}` : ""}`;
-
-    // advance to next round
-    s.idx += 1;
-    s.usedHintForRound = false; // reset hint for next round
-
-    const done = s.idx >= s.rounds.length;
-    if (done) {
-      const win = s.score >= 4;
-      sessions.delete(token);
-      return res.json({
-        ok: true,
-        done: true,
-        score: s.score,
-        total: 5,
-        win,
-        correct,
-        explanation: explanationOut
-      });
-    }
-
-    const next = s.rounds[s.idx];
-    return res.json({
-      ok: true,
-      done: false,
-      correct,
-      explanation: explanationOut,
-      next: {
-        token,
-        idx: s.idx + 1,
-        total: 5,
-        score: s.score,
-        hintUsed: false,
-        riddle: next.text,
-      }
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
 
 /* ========================
    Healthcheck
