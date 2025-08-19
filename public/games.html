@@ -1,24 +1,142 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>All Games</title>
-  <link rel="stylesheet" href="styling.css" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Games</title>
+  <link rel="stylesheet" href="styling.css"/>
+  <style>
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 14px;
+    }
+    .card .card-copy { margin: 6px 0 10px; }
+    .pager-row {
+      display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      margin-top: 18px;
+    }
+    .hidden { display: none !important; }
+  </style>
 </head>
-<body>
-<section class="section container">
-  <h2 class="section-title">Games</h2>
-  <div class="cards">
-    <article class="card"><h3 class="card-title">Predict the Future</h3><p class="card-copy">Enter your name, birth month & favorite place → funny prediction.</p><a class="btn" href="./future.html"><span>Play</span></a></article>
-    <article class="card"><h3 class="card-title">5-Round Quiz</h3><p class="card-copy">Pick a topic → 5 multiple-choice questions.</p><a class="btn" href="./quiz.html"><span>Play</span></a></article>
-    <article class="card"><h3 class="card-title">Find the Character</h3><p class="card-copy">AI holds a Person/Character related to Topic. Ask relevant questions . Quess the person.</p><a class="btn" href="./character.html"><span>Play</span></a></article>
-    <article class="card"><h3 class="card-title">Find the Healthy-Diet</h3><p class="card-copy">Answer 10 quick questions, then get a personalized diet plan.</p><a class="btn" href="./healthy.html"><span>Play</span></a></article>
-    <article class="card"><h3 class="card-title">Future Price Prediction</h3><p class="card-copy">Suggest a product to AI, Answer 10 quick yes/no scenario questions, then guess price after 5 year.</p><a class="btn" href="./price.html"><span>Play</span></a></article>
-    <article class="card"><h3 class="card-title">Budget Glam Builder</h3><p class="card-copy">Pick 12+ beauty items under budget in 180s. Get scored out of 100!</p><a class="btn" href="./glam.html"><span>Play</span></a></article>
+<body class="container">
+  <h2 class="section-title">🎮 Game Collection</h2>
+
+  <!-- PAGE 1 -->
+  <section id="games-page-1" aria-labelledby="page1-title">
+    <h3 id="page1-title" class="section-title" style="margin-bottom:10px">Page 1 · Skill & Strategy</h3>
+    <div class="grid">
+
+      <!-- Predict the Future -->
+      <article class="card">
+        <h4>🔮 Predict the Future</h4>
+        <div class="card-copy">A playful fortune teller spins a light-hearted prophecy based on your inputs.</div>
+        <a class="btn" href="./future.html"><span>Open</span></a>
+      </article>
+
+      <!-- 5-Round Quiz -->
+      <article class="card">
+        <h4>🧪 5-Round Quiz</h4>
+        <div class="card-copy">Five hard, non-repeating questions per topic with a per-question timer.</div>
+        <a class="btn" href="./quiz.html"><span>Open</span></a>
+      </article>
+
+      <!-- Healthy Diet -->
+      <article class="card">
+        <h4>🥗 Healthy Diet</h4>
+        <div class="card-copy">Answer 10 quick questions and get a safe, practical diet plan.</div>
+        <a class="btn" href="./healthy.html"><span>Open</span></a>
+      </article>
+
+      <!-- Future Price Prediction -->
+      <article class="card">
+        <h4>💹 Future Price Prediction</h4>
+        <div class="card-copy">Answer 10 scenarios, then guess the 5-year price before the AI reveals its estimate.</div>
+        <a class="btn" href="./price.html"><span>Open</span></a>
+      </article>
+
+    </div>
+
+    <div class="pager-row">
+      <span class="badge">Page 1 of 2</span>
+      <button id="next-page" class="btn" type="button"><span>Next →</span></button>
+    </div>
+  </section>
+
+  <!-- PAGE 2 -->
+  <section id="games-page-2" class="hidden" aria-labelledby="page2-title">
+    <h3 id="page2-title" class="section-title" style="margin-bottom:10px">Page 2 · Puzzles & Builders</h3>
+    <div class="grid">
+
+      <!-- Guess the Character -->
+      <article class="card">
+        <h4>🕵️ Guess the Character</h4>
+        <div class="card-copy">Hard mode 20-questions style. Unique character per topic, with late-round hints.</div>
+        <a class="btn" href="./character.html"><span>Open</span></a>
+      </article>
+
+      <!-- Budget Glam Builder -->
+      <article class="card">
+        <h4>💄 Budget Glam Builder</h4>
+        <div class="card-copy">Build your kit under budget with eco picks & categories. Timed challenge.</div>
+        <a class="btn" href="./glam.html"><span>Open</span></a>
+      </article>
+
+      <!-- Riddle Quest -->
+      <article class="card">
+        <h4>🧠 Riddle Quest</h4>
+        <div class="card-copy">Solve 5 unique riddles. One hint per riddle. Win with 4 or more!</div>
+        <a class="btn" href="./riddle.html"><span>Open</span></a>
+      </article>
+
+    </div>
+
+    <div class="pager-row">
+      <button id="prev-page" class="btn" type="button"><span>← Previous</span></button>
+      <span class="badge">Page 2 of 2</span>
+    </div>
+  </section>
+
+  <div style="margin-top:24px;display:flex;justify-content:flex-start;">
+    <a class="back" href="./index.html">← Home</a>
   </div>
-  <div style="margin-top:24px;display:flex;justify-content:flex-start;"><a href="./index.html" class="back">← Back</a></div>
-</section>
-<script src="script.js"></script>
+
+  <script>
+    (function(){
+      const p1 = document.getElementById('games-page-1');
+      const p2 = document.getElementById('games-page-2');
+      const nextBtn = document.getElementById('next-page');
+      const prevBtn = document.getElementById('prev-page');
+
+      // Restore page from hash or storage
+      const getInitial = () => {
+        const hash = (location.hash || '').replace('#','').trim();
+        if (hash === '2') return 2;
+        const saved = Number(sessionStorage.getItem('GAMES_PAGE') || '1');
+        return saved === 2 ? 2 : 1;
+      };
+
+      function showPage(n){
+        if (n === 2) {
+          p1.classList.add('hidden');
+          p2.classList.remove('hidden');
+          location.hash = '2';
+          sessionStorage.setItem('GAMES_PAGE', '2');
+        } else {
+          p1.classList.remove('hidden');
+          p2.classList.add('hidden');
+          location.hash = '1';
+          sessionStorage.setItem('GAMES_PAGE', '1');
+        }
+      }
+
+      // Wire buttons
+      nextBtn?.addEventListener('click', () => showPage(2));
+      prevBtn?.addEventListener('click', () => showPage(1));
+
+      // Init
+      showPage(getInitial());
+    })();
+  </script>
 </body>
 </html>
