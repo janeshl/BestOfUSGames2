@@ -462,365 +462,324 @@ function html(e,m){if(e)e.innerHTML=m}
   start();
 })();
 
-/* ========================
-   Budget Glam Builder — Bucketed list + tags + 3 skin tips
-   - Group items by category, show name + one-sentence description
-   - Budget guard; timer auto-finish; early finish allowed
-======================== */
-(function(){
+// ===========================
+// 💄 Budget Glam Builder
+// ===========================
+(function () {
   const form = document.querySelector('#glam-start');
-  if(!form) return;
+  if (!form) return;
 
+  // UI elements
   const hud        = document.querySelector('#glam-hud');
   const timerEl    = document.querySelector('#glam-timer');
   const budgetEl   = document.querySelector('#glam-budget');
   const spendEl    = document.querySelector('#glam-spend');
   const countEl    = document.querySelector('#glam-count');
   const pageEl     = document.querySelector('#glam-page');
-  const toastEl    = document.querySelector('#glam-toast');
 
   const listEl     = document.querySelector('#glam-list');
-  const pagerRow   = document.querySelector('#glam-pager');
+  const pager      = document.querySelector('#glam-pager');
   const prevBtn    = document.querySelector('#glam-prev');
   const nextBtn    = document.querySelector('#glam-next');
 
-  const actionsRow = document.querySelector('#glam-actions');
+  const actions    = document.querySelector('#glam-actions');
   const finishBtn  = document.querySelector('#glam-finish');
 
-  // Review + Results sections
-  const reviewSec   = document.querySelector('#glam-review');
-  const reviewMeta  = document.querySelector('#glam-review-meta');
-  const reviewList  = document.querySelector('#glam-review-list');
-  const generateBtn = document.querySelector('#glam-generate');
+  // NEW review + generate
+  const reviewEl   = document.querySelector('#glam-review');       // added in HTML patch below
+  const reviewList = document.querySelector('#glam-review-list');  // added in HTML patch below
+  const genBtn     = document.querySelector('#glam-generate');     // added in HTML patch below
 
-  const resultsSec  = document.querySelector('#glam-results');
-  const outEl       = document.querySelector('#glam-out');
-  const detailList  = document.querySelector('#glam-detail');
+  const outEl      = document.querySelector('#glam-out');
 
-  let token = null;
-  let items = [];
-  let page = 0;
-  let selected = new Set();
-  let tHandle = null;
-  let timeLeft = 180;
-  let budgetInr = 0;
-  let finishing = false;
-  const perPage = 10;
+  // State
+  let token        = null;
+  let items        = [];
+  let budget       = 0;
+  let page         = 0;
+  let selected     = new Set();
+  let tHandle      = null;
+  let timeLeft     = 180; // seconds
+  let startedAt    = 0;
 
-  const show = (el) => el && el.classList.remove('hidden');
-  const hide = (el) => el && el.classList.add('hidden');
+  // Derived helpers
+  const visibleSlice = () => items.slice(page * 10, page * 10 + 10);
+  const selectedTotal = () =>
+    [...selected].reduce((sum, idx) => sum + (Number(items[idx]?.price) || 0), 0);
 
-  function showToast(msg){
-    if(!toastEl) return;
-    toastEl.textContent = msg || '';
-    toastEl.classList.remove('hidden');
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(()=> toastEl.classList.add('hidden'), 2200);
+  function show(el) { el && el.classList.remove('hidden'); }
+  function hide(el) { el && el.classList.add('hidden'); }
+  function set(el, text) { if (el) el.textContent = text; }
+
+  function updateHUD() {
+    set(budgetEl, `Budget: ₹${budget}`);
+    set(spendEl, `Spend: ₹${selectedTotal()}`);
+    set(countEl, `Selected: ${selected.size}/12`);
+    set(pageEl, `Page: ${page + 1}`);
   }
 
-  function clearTimer(){ if(tHandle){ clearInterval(tHandle); tHandle = null; } }
-  function startTimer(){
+  function clearTimer() {
+    if (tHandle) {
+      clearInterval(tHandle);
+      tHandle = null;
+    }
+  }
+
+  function startTimer() {
     clearTimer();
     timeLeft = 180;
-    timerEl.textContent = `Time: ${timeLeft}s`;
-    tHandle = setInterval(()=>{
+    startedAt = Date.now();
+    set(timerEl, `Time: ${timeLeft}s`);
+    tHandle = setInterval(() => {
       timeLeft -= 1;
-      if (timeLeft < 0) timeLeft = 0;
-      timerEl.textContent = `Time: ${timeLeft}s`;
-      if(timeLeft <= 0){
+      set(timerEl, `Time: ${timeLeft}s`);
+      if (timeLeft <= 0) {
         clearTimer();
-        // Auto-finish with current picks; fail if <12
-        generateResults(true);
+        // Auto-finish: player fails if < 12; still send for scoring
+        goToReview(true);
       }
     }, 1000);
   }
 
-  function currentSpend(){
-    return Array.from(selected).reduce((sum, idx)=> sum + (Number(items[idx]?.price)||0), 0);
-  }
+  function renderList() {
+    listEl.innerHTML = '';
+    const slice = visibleSlice();
 
-  function updateHUD(){
-    budgetEl.textContent = `Budget: ₹${budgetInr}`;
-    spendEl.textContent  = `Spend: ₹${currentSpend()}`;
-    countEl.textContent  = `Selected: ${selected.size}/12`;
-    const totalPages = Math.max(1, Math.ceil(items.length / perPage));
-    pageEl.textContent   = `Page: ${Math.min(page+1, totalPages)}`;
-  }
+    slice.forEach((p, offset) => {
+      const idx = page * 10 + offset;
+      const d = document.createElement('div');
+      d.className = 'option';
 
-  // One-sentence description
-  function oneSentence(p){
-    const desc = (p.description || '').trim();
-    if(desc){
-      const m = desc.match(/[^.!?]+[.!?]?/);
-      if(m) return m[0].trim().replace(/\s+/g,' ');
-    }
-    const cat = (p.category || 'Product').toLowerCase();
-    const eco = p.ecoFriendly ? ' Eco-friendly choice.' : '';
-    return `A ${cat} suitable for everyday use.${eco}`.trim();
-  }
+      // bucket title style: show category as a small label
+      const tags = Array.isArray(p.tags) ? p.tags : [];
+      d.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+          <div>
+            <div style="font-weight:600">${p.name}</div>
+            <div style="opacity:.8">${p.description}</div>
+            <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+              <span class="badge">${p.category}</span>
+              ${p.ecoFriendly ? '<span class="badge">eco</span>' : ''}
+              ${tags.map(t => `<span class="badge">${String(t)}</span>`).join('')}
+            </div>
+          </div>
+          <div style="white-space:nowrap; font-weight:600">₹${p.price}</div>
+        </div>
+      `;
 
-  // Tag chip line
-  function formatTags(p){
-    const tags = Array.isArray(p.tags) ? p.tags.map(t=>String(t).trim()).filter(Boolean) : [];
-    const base = [];
-    if (p.category) base.push(p.category);
-    if (p.ecoFriendly) base.push('Eco-Friendly');
-    const all = [...base, ...tags].filter(Boolean);
-    return all.length ? all.slice(0, 5).join(' · ') : '';
-  }
+      // selected styling
+      if (selected.has(idx)) {
+        d.style.background = 'rgba(80,200,120,.15)';
+        d.style.borderColor = 'rgba(80,200,120,.5)';
+      }
 
-  // Bucketed render
-  function renderBucketed(container, indices, clickable=true){
-    container.innerHTML = '';
-    if(!indices.length){
-      container.textContent = 'No items.';
-      return;
-    }
+      d.style.cursor = 'pointer';
+      d.onclick = () => {
+        const price = Number(items[idx]?.price) || 0;
+        if (!selected.has(idx)) {
+          // Budget guard: block add if would exceed budget
+          const newTotal = selectedTotal() + price;
+          if (newTotal > budget) {
+            // light feedback
+            d.style.animation = 'shake .25s';
+            setTimeout(() => (d.style.animation = ''), 260);
+            // also show a small inline note
+            outEl.style.display = 'block';
+            outEl.textContent = `⚠️ Can't add "${items[idx].name}" — it would exceed your budget (₹${newTotal} > ₹${budget}).`;
+            return;
+          }
+          selected.add(idx);
+        } else {
+          selected.delete(idx);
+        }
+        renderList(); // re-render to update highlight
+        updateHUD();
+      };
 
-    const groups = {};
-    for(const idx of indices){
-      const p = items[idx];
-      const cat = p?.category || 'Other';
-      if(!groups[cat]) groups[cat] = [];
-      groups[cat].push(idx);
-    }
-
-    const preferred = ['Sunscreen','Cleanser','Moisturizer','Serum','Exfoliant','Toner','Eye Cream','Mask','Lip Care','Body Lotion','Hair Care','Primer','Spot Treatment','Other'];
-    const cats = Object.keys(groups).sort((a,b)=>{
-      const ia = preferred.indexOf(a); const ib = preferred.indexOf(b);
-      if(ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-      return a.localeCompare(b);
+      listEl.appendChild(d);
     });
 
-    for(const cat of cats){
-      const head = document.createElement('div');
-      head.className = 'card-copy';
-      head.textContent = `• ${cat}`;
-      head.style.margin = '8px 0 4px';
-      container.appendChild(head);
-
-      for(const idx of groups[cat]){
-        const p = items[idx];
-        const row = document.createElement('div');
-        row.className = 'option';
-        row.style.cursor = clickable ? 'pointer' : 'default';
-        row.style.background = selected.has(idx) && clickable ? 'rgba(80,200,120,.2)' : '';
-
-        const line1 = `${p.name} — ₹${p.price}`;
-        const line2 = oneSentence(p);
-        const tagLine = formatTags(p);
-
-        row.innerHTML = `
-          <div>${line1}</div>
-          <div style="opacity:.9">${line2}</div>
-          ${tagLine ? `<div class="badge" style="display:inline-block;margin-top:6px;">${tagLine}</div>` : ``}
-        `;
-
-        if(clickable){
-          row.onclick = ()=>{
-            if(finishing) return;
-
-            if(selected.has(idx)){
-              selected.delete(idx);
-              row.style.background = '';
-              updateHUD();
-              return;
-            }
-            const prospective = currentSpend() + (Number(p.price)||0);
-            if(prospective > budgetInr){
-              showToast(`🚫 Over budget: selecting this would cost ₹${prospective} (> ₹${budgetInr})`);
-              return;
-            }
-            selected.add(idx);
-            row.style.background = 'rgba(80,200,120,.2)';
-            updateHUD();
-          };
-        }
-
-        container.appendChild(row);
-      }
-    }
-  }
-
-  function renderPage(){
-    const start = page * perPage;
-    const end   = Math.min(items.length, start + perPage);
-    const idxs  = [];
-    for(let i=start; i<end; i++) idxs.push(i);
-    renderBucketed(listEl, idxs, true);
-
-    prevBtn.disabled = page === 0 || finishing;
-    nextBtn.disabled = end >= items.length || finishing;
-
+    // Pager buttons visibility
+    prevBtn.style.display = page > 0 ? 'inline-block' : 'none';
+    nextBtn.style.display = (page + 1) * 10 < items.length ? 'inline-block' : 'none';
     updateHUD();
   }
 
-  // Review
-  function goToReview(){
+  function goToReview(autoFinished) {
+    // Move to review UI (no navigation)
+    hide(actions);
+    hide(pager);
+    hide(listEl);
+
+    show(reviewEl);
+    reviewList.innerHTML = '';
+
+    // Build selected list
+    if (selected.size === 0) {
+      const p = document.createElement('div');
+      p.className = 'pill';
+      p.textContent = 'No products selected.';
+      reviewList.appendChild(p);
+    } else {
+      [...selected].forEach((idx) => {
+        const it = items[idx];
+        const row = document.createElement('div');
+        row.className = 'option';
+        row.innerHTML = `
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+            <div>
+              <div style="font-weight:600">${it.name}</div>
+              <div style="opacity:.8">${it.description}</div>
+              <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+                <span class="badge">${it.category}</span>
+                ${it.ecoFriendly ? '<span class="badge">eco</span>' : ''}
+                ${(Array.isArray(it.tags) ? it.tags : []).map(t => `<span class="badge">${String(t)}</span>`).join('')}
+              </div>
+            </div>
+            <div style="white-space:nowrap; font-weight:600">₹${it.price}</div>
+          </div>
+        `;
+        reviewList.appendChild(row);
+      });
+    }
+
+    // Inform if auto-finished or <12 picks
+    outEl.style.display = 'block';
+    const msgParts = [];
+    if (autoFinished) msgParts.push('⏱ Time up — auto-finished with your current selections.');
+    if (selected.size < 12) msgParts.push('You picked fewer than 12 products; this will be marked as a fail.');
+    outEl.textContent = msgParts.join(' ') || 'Review your selections, then generate your results.';
+
+    // Keep HUD on screen
+    show(hud);
     clearTimer();
-    if(selected.size < 12){
-      generateResults(false);
+  }
+
+  async function generateResults() {
+    if (!token) {
+      outEl.style.display = 'block';
+      outEl.textContent = 'Session not found. Please start again.';
       return;
     }
-    finishing = true;
-    hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow);
+    outEl.style.display = 'block';
+    outEl.textContent = '✨ Crunching your glam score...';
 
-    const spend = currentSpend();
-    reviewMeta.textContent = `You selected ${selected.size} items, Spend: ₹${spend} / Budget: ₹${budgetInr} | Time: ${180 - Math.max(0,timeLeft)}s`;
+    const timeTaken = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    const payload = {
+      token,
+      selectedIndices: [...selected],
+      timeTaken
+    };
 
-    const chosen = Array.from(selected);
-    renderBucketed(reviewList, chosen, false);
-    show(reviewSec);
-  }
-
-  // Skin tips
-  function skinTips(selItems){
-    const hasSPF = selItems.some(p => {
-      const text = `${p.name} ${p.category} ${(p.tags||[]).join(' ')}`.toLowerCase();
-      return text.includes('spf') || text.includes('sunscreen') || (p.category||'').toLowerCase()==='sunscreen';
-    });
-
-    if(!hasSPF){
-      return [
-        "Add a broad-spectrum SPF 30+ to your daytime routine.",
-        "Apply two-finger rule for face/neck; reapply every 2–3 hours outdoors.",
-        "Seek shade 10am–4pm and wear sunglasses/hat for extra protection."
-      ];
-    }
-    return [
-      "Reapply sunscreen every 2–3 hours, and after sweat or towel-dry.",
-      "Use the two-finger rule for adequate coverage; include ears and neck.",
-      "Combine SPF with shade and sunglasses for best protection."
-    ];
-  }
-
-  // Results
-  async function generateResults(autoTimed = false){
-    if(finishing && !autoTimed) return;
-    finishing = true;
-
-    hide(hud); hide(listEl); hide(pagerRow); hide(actionsRow); hide(reviewSec);
-    outEl.textContent = 'Scoring your kit...';
-    detailList.innerHTML = '';
-    show(resultsSec);
-
-    try{
+    try {
       const res = await fetch('/api/glam/score', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          token,
-          selectedIndices: Array.from(selected),
-          timeTaken: 180 - Math.max(0, timeLeft)
-        })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
       const json = await res.json();
-      if(!json.ok){
+      if (!json.ok) {
         outEl.textContent = 'Error: ' + (json.error || 'Unknown error');
         return;
       }
 
-      const selItems = Array.from(selected).map(i=>items[i]);
-      const tips = skinTips(selItems);
-
-      const pos = Array.isArray(json.positives) ? json.positives.slice(0,6) : [];
-      const neg = Array.isArray(json.negatives) ? json.negatives.slice(0,6) : [];
+      // Build pretty results
       const lines = [];
-      lines.push(json.win ? '🎉 Great build!' : '❌ failed to build.');
-      lines.push(`Score: ${json.score}/100`);
-      if(json.summary) lines.push(json.summary);
-      lines.push(`Budget: ₹${json.budgetInr} | Spend: ₹${json.totalSpend} | Picks: ${selected.size} | Time: ${json.timeTaken}s`);
-      if(pos.length){
-        lines.push('\n👍 Positives:');
-        pos.forEach((p,i)=>lines.push(`  ${i+1}. ${p}`));
+      lines.push(json.win ? `🎉 Great build! Score ${json.score}/100` : `😢 Failed. Score ${json.score}/100`);
+      lines.push(`Budget: ₹${json.budgetInr}   •   Spend: ₹${json.totalSpend}   •   Time: ${json.timeTaken}s`);
+      if (json.summary) lines.push('\nSummary: ' + json.summary);
+
+      if (Array.isArray(json.positives) && json.positives.length) {
+        lines.push('\nPositives:');
+        json.positives.forEach(p => lines.push(` • ${p}`));
       }
-      if(neg.length){
-        lines.push('\n⚠️ Points to improve:');
-        neg.forEach((n,i)=>lines.push(`  ${i+1}. ${n}`));
+      if (Array.isArray(json.negatives) && json.negatives.length) {
+        lines.push('\nAreas to improve:');
+        json.negatives.forEach(n => lines.push(` • ${n}`));
       }
-      lines.push('\n🧴 Skin Protection Tips:');
-      tips.forEach((t,i)=> lines.push(`  ${i+1}. ${t}`));
+
+      // Per-product 1–2 sentence info
+      lines.push('\nYour picks:');
+      [...selected].forEach((idx) => {
+        const it = items[idx];
+        const tagStr = (Array.isArray(it.tags) && it.tags.length) ? ` [${it.tags.join(', ')}]` : '';
+        lines.push(` • ${it.name} — ₹${it.price}${tagStr}`);
+        // 1–2 sentence summary using what we have (name + description)
+        lines.push(`   ${it.description}`);
+      });
+
+      // Tips
+      lines.push('\nSkin protection tips:');
+      lines.push(' • Use broad-spectrum SPF 30+ every day, reapply every 2–3 hours outdoors.');
+      lines.push(' • Layer light to heavy: cleanser → treatment → moisturizer → sunscreen (AM).');
+      lines.push(' • Patch test new actives and avoid over-exfoliating to protect your skin barrier.');
+
       outEl.textContent = lines.join('\n');
 
-      // Product blurbs
-      detailList.innerHTML = '';
-      selItems.forEach((p) => {
-        const div = document.createElement('div');
-        div.className = 'option';
-        const tagsTxt = formatTags(p);
-        const s1 = `${p.name} — ₹${p.price}.`;
-        const s2 = (p.description && p.description.trim().length)
-          ? `${oneSentence(p)}`
-          : `Useful addition to round out your routine.`;
-        div.innerHTML = `
-          <div>${s1}</div>
-          <div style="opacity:.9">${s2}</div>
-          ${tagsTxt ? `<div class="badge" style="display:inline-block;margin-top:6px;">${tagsTxt}</div>` : ``}
-        `;
-        detailList.appendChild(div);
-      });
-    }catch{
-      outEl.textContent = 'Network error.';
+      // Lock UI after results
+      hide(genBtn);
+    } catch {
+      outEl.textContent = 'Network error while generating results.';
     }
   }
 
-  prevBtn.addEventListener('click', ()=>{ if(page>0 && !finishing){ page--; renderPage(); } });
-  nextBtn.addEventListener('click', ()=>{ if((page+1)*perPage < items.length && !finishing){ page++; renderPage(); } });
-
-  // Finish Now: allow <12 (immediate results -> fail), otherwise go to review
-  finishBtn.addEventListener('click', (e)=>{
-    e.preventDefault();
-    if(selected.size < 12){
-      generateResults(false);
-    } else {
-      goToReview();
-    }
+  // Pager
+  prevBtn?.addEventListener('click', () => {
+    if (page > 0) { page--; renderList(); }
+  });
+  nextBtn?.addEventListener('click', () => {
+    if ((page + 1) * 10 < items.length) { page++; renderList(); }
   });
 
-  generateBtn.addEventListener('click', (e)=>{ e.preventDefault(); generateResults(false); });
-
-  form.addEventListener('submit', async (e)=>{
+  // Finish -> go to review (allow <12 picks; will be fail in results)
+  finishBtn?.addEventListener('click', (e) => {
     e.preventDefault();
-    finishing = false;
+    goToReview(false);
+  });
 
-    hide(reviewSec); hide(resultsSec);
-    outEl.textContent = ''; detailList.innerHTML = '';
-    listEl.textContent = 'Loading...';
+  // Generate results
+  genBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    generateResults();
+  });
+
+  // Start
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    outEl.style.display = 'block';
+    outEl.textContent = 'Loading products...';
+    hide(reviewEl);
+    hide(genBtn);
+    show(listEl);
+    show(pager);
+    show(actions);
 
     const gender = form.gender.value;
-    const budget = Number(form.budget.value);
-
-    form.style.display = 'none';
-
-    try{
+    const b = Number(form.budget.value);
+    try {
       const res = await fetch('/api/glam/start', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ gender, budgetInr: budget })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gender, budgetInr: b })
       });
       const json = await res.json();
-      if(!json.ok){
-        listEl.textContent = 'Error: ' + (json.error || 'Unknown error');
-        form.style.display = '';
-        return;
-      }
+      if (!json.ok) { outEl.textContent = 'Error: ' + (json.error || 'Unknown error'); return; }
 
-      token      = json.token;
-      items      = Array.isArray(json.items) ? json.items : [];
-      budgetInr  = Number(json.budgetInr) || budget || 0;
-      selected.clear();
+      token  = json.token;
+      items  = json.items || [];
+      budget = json.budgetInr || b;
+
+      // Reset UI state
       page = 0;
+      selected.clear();
+      outEl.textContent = '';
+      outEl.style.display = 'none';
 
-      hud.classList.remove('hidden');
-      listEl.classList.remove('hidden');
-      pagerRow.classList.remove('hidden');
-      actionsRow.classList.remove('hidden');
-
-      renderPage();
+      show(hud);
+      renderList();
       startTimer();
-    }catch{
-      listEl.textContent = 'Network error';
-      form.style.display = '';
+    } catch {
+      outEl.textContent = 'Network error. Please try again.';
     }
   });
 })();
