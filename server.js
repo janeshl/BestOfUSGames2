@@ -47,62 +47,27 @@ Favorite place: ${favoritePlace}`,
 
   // Game 2: 5-Round Quiz (HARD)
   quiz: (topic, bannedQuestions = []) => [
-    {
-      role: "system",
-      content:
-        `Create a 5-question Very **hard** multiple-choice quiz for the topic.
-Rules:
-- EXACTLY 5 questions.
-- EACH question has EXACTLY 4 options.
-- Indicate the correct option index (1-4).
-- Avoid these questions (case-insensitive): ${bannedQuestions.join(" | ") || "(none)"}.
-- Return STRICT JSON ONLY with shape:
-{
-  "questions": [
-    { "question": string, "options": string[4], "answerIndex": 1|2|3|4, "explanation": string }
-    x5
-  ]
-}
-No extra text.`,
-    },
-    { role: "user", content: `Topic: ${topic}. JSON only.` },
+    { role: "system", content: `You are an expert quiz generator. Create EXACTLY 5 difficult multiple-choice questions STRICTLY and DIRECTLY related to the exact topic provided. Do not broaden, reinterpret, or substitute the topic. Every question must test knowledge specifically about that topic. Exactly 4 options per question, exactly one correct answer, answerIndex 1-4. Avoid these previous questions: ${bannedQuestions.join(" | ") || "(none)"}. Return STRICT JSON ONLY: {"questions":[{"question":"string","options":["string","string","string","string"],"answerIndex":1,"explanation":"string"}]}. No markdown or extra text.` },
+    { role: "user", content: `Exact topic: "${topic}". Generate questions ONLY about this exact topic. JSON only.` },
   ],
 
   // Game 3: Guess the Character (hard)
   characterCandidates: (topic, excludeList = []) => [
-    {
-      role: "system",
-      content:
-        `Return STRICT JSON {"candidates": string[]} of 5 **hard-level** people or fictional characters related to the topic.
-Avoid these (case-insensitive): ${excludeList.join(", ") || "(none)"}.
-No other text.`,
-    },
-    { role: "user", content: `Topic: ${topic}. JSON only.` },
+    { role: "system", content: `Select EXACTLY 5 people or fictional characters DIRECTLY and CLEARLY related to the exact user topic. Every candidate must have a strong, obvious connection. Never choose random famous people or loosely related names. Preserve the exact scope of the topic. Avoid: ${excludeList.join(", ") || "(none)"}. Return STRICT JSON ONLY: {"candidates":["name1","name2","name3","name4","name5"]}. No extra text.` },
+    { role: "user", content: `Exact topic: "${topic}". Select candidates ONLY directly related to this topic. JSON only.` },
   ],
 
-  // Multi-hints array (we'll show only one per round from 8–10)
   characterTurn: ({ name, qa, round, text }) => [
-    {
-      role: "system",
-      content: `You are running a 20-questions style game. The secret answer is "${name}".
-Respond to the user's message as a short yes/no style answer (<= 15 words), without revealing the name.
-Detect if the user is explicitly guessing the exact name.
-
-Return strict JSON with keys:
-- answer: string
-- isGuess: boolean
-- guessedName: string
-- hints: string[]   // empty or multiple hints; if round >= 8 provide 2–3 progressively stronger hints without revealing
-
-No extra text.`,
-    },
-    {
-      role: "user",
-      content: `Previous Q&A:
+    { role: "system", content: `You are running a Guess the Character game. Secret character: "${name}". Answer naturally and briefly without revealing the name. Detect direct guesses. Return STRICT JSON: {"answer":"string","isGuess":true,"guessedName":"string","hints":["string"]}. If round is 8 or higher, hints MUST contain at least one helpful clue that does not mention the secret name. Hints become stronger in rounds 9 and 10. No markdown or extra text.` },
+    { role: "user", content: `Previous Q&A:
 ${qa}
 Current Round: ${round}
-User message: ${text}`,
-    },
+User message: ${text}` },
+  ],
+
+  characterHint: ({ name, topic, round }) => [
+    { role: "system", content: `Generate one helpful clue for Guess the Character. Secret: "${name}". Topic: "${topic}". Round: ${round}. Do not mention the name. Round 8 broad clue, round 9 stronger, round 10 strongest without naming it. Max 25 words. Return STRICT JSON ONLY: {"hint":"string"}.` },
+    { role: "user", content: "Generate the clue. JSON only." },
   ],
 
   // Game 4: Healthy Diet — 10 questions
@@ -320,20 +285,19 @@ app.post("/api/quiz/start", async (req, res) => {
       (q) => q?.question && !has.has(String(q.question).toLowerCase())
     );
 
-    // Fallback if the model returned too few fresh questions
-    while (questions.length < 5) {
-      const i = questions.length + 1;
-      questions.push({
-        question: `Challenging placeholder Q${i} about ${topic}?`,
-        options: ["Option A", "Option B", "Option C", "Option D"],
-        answerIndex: 1,
-        explanation:
-          "This is a placeholder. Regenerate with a clearer topic for a better quiz.",
-      });
+    // Regenerate instead of showing unrelated placeholder questions
+    if (questions.length < 5) {
+      try {
+        const retryRaw = await chatCompletion(PROMPTS.quiz(topic, bannedList.slice(-20)), 0.3, 1400);
+        const retryParsed = JSON.parse(retryRaw);
+        if (Array.isArray(retryParsed.questions)) questions = retryParsed.questions;
+      } catch (err) {
+        console.error("Quiz regeneration failed:", err.message);
+      }
     }
 
-    // Trim to exactly 5
-    questions = questions.slice(0, 5);
+    questions = questions.filter((q) => q?.question && Array.isArray(q.options) && q.options.length === 4 && Number(q.answerIndex) >= 1 && Number(q.answerIndex) <= 4).slice(0, 5);
+    if (questions.length < 5) return res.status(500).json({ ok: false, error: "Unable to generate enough valid questions for this exact topic. Please try again." });
 
     // Update memory (keep last 50 questions per topic)
     recentQuizByTopic.set(
@@ -418,17 +382,19 @@ app.post("/api/character/start", async (req, res) => {
     const exclude = recentByTopic.get(topic) || [];
     const chooseMessages = PROMPTS.characterCandidates(topic, exclude);
 
-    let candidates = ["Ada Lovelace", "Miyamoto Musashi", "Hedy Lamarr", "Sisyphus", "Alan Turing"];
+    let candidates = [];
     try {
       const raw = await chatCompletion(chooseMessages, 0.7, 200);
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.candidates) && parsed.candidates.length) candidates = parsed.candidates;
     } catch {
-      // fallback list above
+      // no unrelated fallback candidates
     }
 
+    const validCandidates = candidates.map((c) => String(c).trim()).filter(Boolean);
+    if (!validCandidates.length) return res.status(500).json({ ok: false, error: "Unable to find characters directly related to this topic. Please try again." });
     const lowerRecent = exclude.map((x) => x.toLowerCase());
-    const name = candidates.find((c) => !lowerRecent.includes(String(c).toLowerCase())) || candidates[0];
+    const name = validCandidates.find((c) => !lowerRecent.includes(c.toLowerCase())) || validCandidates[0];
 
     // Update recent (store last 5 per topic)
     recentByTopic.set(topic, [name, ...exclude].slice(0, 5));
@@ -482,27 +448,29 @@ app.post("/api/character/turn", async (req, res) => {
       }
     }
 
-    // Out of rounds?
-    if (s.rounds >= 10) {
-      const reveal = `Sorry Out of rounds! The character was: ${s.name}.`;
-      sessions.delete(sessionId);
-      return res.json({
-        ok: true,
-        done: true,
-        win: false,
-        name: s.name,
-        answer: parsed.answer,
-        hints: [],
-        message: reveal,
-      });
-    }
-
-    // Provide at most ONE hint per round (only for rounds 8, 9, 10)
+    // Generate guaranteed clues from round 8 onward BEFORE the game-over check.
     const roundNow = s.rounds;
     let hintsOut = [];
     if (roundNow >= 8) {
-      const arr = Array.isArray(parsed.hints) ? parsed.hints : [];
-      if (arr.length) hintsOut = [arr[0]];
+      const arr = Array.isArray(parsed.hints) ? parsed.hints.filter((hint) => typeof hint === "string" && hint.trim()) : [];
+      if (arr.length) hintsOut = [arr[0].trim()];
+      if (!hintsOut.length) {
+        try {
+          const hintRaw = await chatCompletion(PROMPTS.characterHint({ name: s.name, topic: s.topic, round: roundNow }), 0.4, 150);
+          const hintParsed = JSON.parse(hintRaw);
+          if (typeof hintParsed?.hint === "string" && hintParsed.hint.trim()) hintsOut = [hintParsed.hint.trim()];
+        } catch (err) {
+          console.error("Character hint generation failed:", err.message);
+        }
+      }
+      if (!hintsOut.length) hintsOut = [`This character has a strong and direct connection to the topic: ${s.topic}.`];
+    }
+
+    // Out of rounds? Round 10 still includes the final clue.
+    if (s.rounds >= 10) {
+      const reveal = `Sorry, out of rounds! The character was: ${s.name}.`;
+      sessions.delete(sessionId);
+      return res.json({ ok: true, done: true, win: false, name: s.name, answer: parsed.answer, hints: hintsOut, message: reveal });
     }
 
     res.json({
@@ -740,11 +708,16 @@ app.post("/api/fpp/guess", (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid guess." });
     }
 
-    const win = Math.abs(playerGuess - ai) <= 0.75 * ai; // within 60%
+    if (playerGuess <= 0) return res.status(400).json({ ok: false, error: "Please enter a valid positive price." });
+    const difference = Math.abs(playerGuess - ai);
+    const accuracy = Math.max(0, 1 - difference / ai) * 100;
+    const win = accuracy >= 80;
 
     const payload = {
       ok: true,
       win,
+      accuracy: Math.round(accuracy * 100) / 100,
+      requiredAccuracy: 80,
       currency: s.currency,
       playerGuess,
       aiPrice: ai,
