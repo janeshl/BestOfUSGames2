@@ -17,6 +17,9 @@
 
     <div id="game" style="display:none">
       <div class="badge" id="rounds">Rounds left: 10</div>
+      <div class="pill" id="agent-panel" style="margin:10px 0">
+        🤖 AI Detective: <span id="agent-status">Ready to investigate</span> · Confidence: <span id="agent-confidence">0%</span>
+      </div>
       <div class="chat" id="chat"></div>
 
       <form id="turn-form" class="game-form" style="margin-top:10px" autocomplete="off">
@@ -24,6 +27,12 @@
         <button class="btn" type="submit"><span>Send</span></button>
       </form>
 
+      <div id="final-guess" style="display:none;margin-top:12px">
+        <form id="final-guess-form" class="game-form" autocomplete="off">
+          <input id="final-guess-input" placeholder="Round 10 final guess: who is the character?" required autocomplete="off" />
+          <button class="btn" type="submit"><span>Submit Final Guess</span></button>
+        </form>
+      </div>
       <div id="result"></div>
     </div>
   </article>
