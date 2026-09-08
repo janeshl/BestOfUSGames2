@@ -7,11 +7,12 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama3-70b-8192";
+// Supports both the standard GROQ_API_KEY name and the QROQ_API_KEY name supplied in deployment settings.
+const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.QROQ_API_KEY;
+const GROQ_MODEL = process.env.MODEL_NAME || process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-if (!GROQ_API_KEY) console.warn("⚠️  GROQ_API_KEY not set.");
+if (!GROQ_API_KEY) console.warn("⚠️  GROQ_API_KEY (or QROQ_API_KEY) not set.");
 
 // Middleware
 app.use(express.json({ limit: "1mb" }));
