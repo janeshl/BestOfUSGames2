@@ -159,76 +159,70 @@ function html(e,m){if(e)e.innerHTML=m}
 })();
 
 /* ========================
-   Find the Character
+   Find the Character — Player vs AI Detective Agent
 ======================== */
 (function(){
   const startForm = $('#start-form');
   const turnForm = $('#turn-form');
+  const finalForm = $('#final-guess-form');
   const chat = $('#chat');
   const rounds = $('#rounds');
   const result = $('#result');
+  const agentStatus = $('#agent-status');
+  const agentConfidence = $('#agent-confidence');
+  const finalWrap = $('#final-guess');
   if(!startForm || !chat) return;
-  let sessionId = null, roundsLeft = 10;
+  let sessionId=null, roundsLeft=10, finalReady=false;
 
-  function pushMsg(who, text){
-    const d = document.createElement('div'); d.className='msg';
-    d.innerHTML = '<b>'+who+':</b> '+text;
-    chat.appendChild(d);
-    chat.scrollTop = chat.scrollHeight;
+  function pushMsg(who,text){ const d=document.createElement('div'); d.className='msg'; d.innerHTML='<b>'+who+':</b> '+text; chat.appendChild(d); chat.scrollTop=chat.scrollHeight; }
+  function updateAgent(agent){ if(!agent) return; if(agentStatus) setText(agentStatus,agent.status||'Investigating...'); if(agentConfidence) setText(agentConfidence,Math.round(Number(agent.confidence)||0)+'%'); }
+  function finish(json){
+    if(json.answer) pushMsg('AI',json.answer);
+    if(Array.isArray(json.hints)&&json.hints.length) pushMsg('AI','💡 Hint: '+json.hints[0]);
+    if(json.agent?.guess) pushMsg('AI Detective','Guess: '+json.agent.guess);
+    if(json.message) pushMsg('Game Master',json.message);
+    const title=json.winner==='player'?'🏆 You Win!':json.winner==='agent'?'🤖 AI Detective Wins!':'🤝 Draw!';
+    const details=`<br>Secret character: <b>${json.name||''}</b>`;
+    html(result,`<div class="pill">${title}${details}</div>`);
+    sessionId=null; finalReady=false; if(finalWrap) finalWrap.style.display='none'; if(turnForm) turnForm.style.display='none';
   }
 
-  startForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    html(chat, '<div class="pill">Picking a secret HARD character...</div>');
-    const topic = e.target.topic.value.trim();
-    e.target.topic.value='';
+  startForm.addEventListener('submit',async e=>{
+    e.preventDefault(); html(chat,'<div class="pill">Picking a secret character and preparing the AI Detective...</div>');
+    const topic=e.target.topic.value.trim(); e.target.topic.value='';
     try{
-      const res = await fetch('/api/character/start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ topic }) });
-      const json = await res.json();
-      if(!json.ok){ html(chat, 'Error: ' + (json.error || 'Unknown error')); return; }
-      sessionId = json.sessionId;
-      roundsLeft = 10;
-      $('#game').style.display = 'block';
-      html(chat, '');
-      pushMsg('AI', json.message || 'Ask your first yes/no question!');
-      setText(rounds, 'Rounds left: ' + roundsLeft);
-    }catch{ html(chat, 'Network error. Please try again.'); }
+      const json=await (await fetch('/api/character/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic})})).json();
+      if(!json.ok){html(chat,'Error: '+(json.error||'Unknown error'));return;}
+      sessionId=json.sessionId; roundsLeft=10; finalReady=false; $('#game').style.display='block'; if(turnForm) turnForm.style.display='flex'; if(finalWrap) finalWrap.style.display='none'; html(chat,''); html(result,'');
+      pushMsg('Game Master',json.message); setText(rounds,'Rounds left: 10'); updateAgent({status:'Ready to investigate',confidence:0});
+    }catch{html(chat,'Network error. Please try again.');}
   });
 
-  if(turnForm){
-    turnForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if(!sessionId) return;
-      const line = $('#userline').value.trim();
-      if(!line) return;
-      pushMsg('You', line);
-      $('#userline').value='';
-      try{
-        const res = await fetch('/api/character/turn', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, text: line }) });
-        const json = await res.json();
-        if(!json.ok){ pushMsg('AI', 'Error: ' + (json.error || 'Unknown error')); return; }
+  if(turnForm) turnForm.addEventListener('submit',async e=>{
+    e.preventDefault(); if(!sessionId||finalReady)return; const line=$('#userline').value.trim(); if(!line)return;
+    pushMsg('You',line); $('#userline').value='';
+    try{
+      const json=await (await fetch('/api/character/turn',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId,text:line})})).json();
+      if(!json.ok){pushMsg('Game Master','Error: '+(json.error||'Unknown error'));return;}
+      if(json.answer) pushMsg('Game Master',json.answer);
+      if(Array.isArray(json.hints)&&json.hints.length) pushMsg('Game Master','💡 Hint: '+json.hints[0]);
+      updateAgent(json.agent);
+      if(json.done){finish(json);return;}
+      if(typeof json.roundsLeft==='number'){roundsLeft=json.roundsLeft;setText(rounds,'Rounds left: '+roundsLeft);}
+      if(json.finalRoundReady){ finalReady=true; turnForm.style.display='none'; if(finalWrap) finalWrap.style.display='block'; pushMsg('Game Master','Round 10 complete. Submit your final guess. The AI Detective will submit its final guess too.'); }
+    }catch{pushMsg('Game Master','Network error. Please try again.');}
+  });
 
-        if(json.answer){ pushMsg('AI', json.answer); }
-        if(Array.isArray(json.hints) && json.hints.length){
-          pushMsg('AI', '💡 Hint: ' + json.hints[0]);
-        }
-
-        if(json.done){
-          if(json.win){
-            pushMsg('AI', json.message || '🎉 Congrats! You found it!');
-            html(result, '<div class="pill">🎉 Correct! Amazing deduction.</div>');
-          } else {
-            const correct = json.name ? ` The character was <b>${json.name}</b>.` : '';
-            html(result, `<div class="pill">🔚 Better luck next time.${correct}</div>`);
-            if(json.message) pushMsg('AI', json.message);
-          }
-          sessionId = null;
-          return;
-        }
-        if(typeof json.roundsLeft === 'number'){ roundsLeft = json.roundsLeft; setText(rounds, 'Rounds left: ' + roundsLeft); }
-      }catch{ pushMsg('AI', 'Network error. Please try again.'); }
-    });
-  }
+  if(finalForm) finalForm.addEventListener('submit',async e=>{
+    e.preventDefault(); if(!sessionId)return; const playerGuess=$('#final-guess-input').value.trim(); if(!playerGuess)return;
+    pushMsg('You (final guess)',playerGuess); pushMsg('AI Detective','Submitting final guess...');
+    try{
+      const json=await (await fetch('/api/character/final-guess',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId,playerGuess})})).json();
+      if(!json.ok){pushMsg('Game Master','Error: '+(json.error||'Unknown error'));return;}
+      pushMsg('AI Detective','Final guess: '+(json.agent?.guess||'No guess'));
+      finish(json);
+    }catch{pushMsg('Game Master','Network error. Please try again.');}
+  });
 })();
 
 // Future Price Prediction (hardened flow)
