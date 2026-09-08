@@ -261,6 +261,8 @@ pre.result, .pill{
 .battle-title{font-family:Orbitron,'Russo One',sans-serif;font-size:18px;letter-spacing:.05em;margin-bottom:5px}
 .battle-subtitle{font-size:13px;color:var(--muted);min-height:34px;margin-bottom:8px}
 .battle-chat{min-height:270px;max-height:430px;margin-bottom:10px}
+.agent-confidence-row{display:flex;justify-content:space-between;align-items:center;font-size:.88rem;margin-top:10px}
+.agent-confidence-row strong{font-size:1rem}
 .agent-meter{height:9px;background:#111133;border:1px solid var(--border);border-radius:999px;overflow:hidden;margin:8px 0 12px}
 #agent-meter-fill{height:100%;width:0%;background:linear-gradient(90deg,#6f6cff,#55d6ff);transition:width .35s ease}
 .private-note{font-size:12px;color:var(--muted);padding:8px 0 2px}
