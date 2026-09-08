@@ -251,3 +251,17 @@ pre.result, .pill{
 @media (prefers-reduced-motion: reduce){
   .btn, .card{transition:none}
 }
+
+/* Player vs AI Detective battle board */
+.battle-header{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 14px}
+.battle-board{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch}
+.battle-box{min-width:0;border:1px solid var(--border);border-radius:16px;padding:14px;background:#0c0c22}
+.player-box{box-shadow:0 0 0 1px rgba(138,92,246,.08)}
+.agent-box{box-shadow:0 0 0 1px rgba(90,200,255,.08)}
+.battle-title{font-family:Orbitron,'Russo One',sans-serif;font-size:18px;letter-spacing:.05em;margin-bottom:5px}
+.battle-subtitle{font-size:13px;color:var(--muted);min-height:34px;margin-bottom:8px}
+.battle-chat{min-height:270px;max-height:430px;margin-bottom:10px}
+.agent-meter{height:9px;background:#111133;border:1px solid var(--border);border-radius:999px;overflow:hidden;margin:8px 0 12px}
+#agent-meter-fill{height:100%;width:0%;background:linear-gradient(90deg,#6f6cff,#55d6ff);transition:width .35s ease}
+.private-note{font-size:12px;color:var(--muted);padding:8px 0 2px}
+@media (max-width: 780px){.battle-board{grid-template-columns:1fr}.battle-chat{min-height:210px;max-height:300px}}
