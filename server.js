@@ -407,7 +407,7 @@ async function judgeCharacterGuess(secretName, guess) {
 }
 
 async function runCharacterAgent(s, round) {
-  const history = s.history.map((h, i) => `Round ${i + 1} Player: ${h.q}\nGame Master: ${h.a}`).join("\n");
+  const history = (s.agent.history || []).map((h, i) => `Round ${i + 1} Agent Question: ${h.q}\nPrivate Game Master Answer: ${h.a}`).join("\n");
   const clues = (s.clues || []).map((c, i) => `Round ${i + 8} clue: ${c}`).join("\n");
   const previousGuesses = (s.agent.guesses || []).map((g) => `${g.guess} (${g.correct ? "correct" : "wrong"})`).join(", ");
   try {
@@ -417,11 +417,12 @@ async function runCharacterAgent(s, round) {
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
       shouldGuess: Boolean(parsed.shouldGuess),
       guess: typeof parsed.guess === "string" && parsed.guess.trim() ? parsed.guess.trim() : null,
-      status: typeof parsed.status === "string" && parsed.status.trim() ? parsed.status.trim() : "Investigating the evidence..."
+      status: typeof parsed.status === "string" && parsed.status.trim() ? parsed.status.trim() : "Investigating the evidence...",
+      question: typeof parsed.question === "string" && parsed.question.trim() ? parsed.question.trim() : null
     };
   } catch (err) {
     console.error("Character agent failed:", err.message);
-    return { confidence: 0, shouldGuess: false, guess: null, status: "Investigating the evidence..." };
+    return { confidence: 0, shouldGuess: false, guess: null, status: "Investigating the evidence...", question: null };
   }
 }
 
@@ -440,7 +441,7 @@ app.post("/api/character/start", async (req, res) => {
     const name = valid.find((c) => !lowerRecent.includes(c.toLowerCase())) || valid[0];
     recentByTopic.set(topic, [name, ...exclude].slice(0, 5));
     const id = makeId();
-    sessions.set(id, { type:"character", topic, name, rounds:0, history:[], clues:[], createdAt:Date.now(), agent:{ guesses:[], confidence:0, status:"Ready to investigate" } });
+    sessions.set(id, { type:"character", topic, name, rounds:0, history:[], clues:[], createdAt:Date.now(), agent:{ guesses:[], history:[], confidence:0, status:"Ready to investigate" } });
     res.json({ ok:true, sessionId:id, message:"You are competing against an AI Detective. Both of you investigate the same public evidence. The first correct early guess wins. After round 10, both submit final guesses; if both are correct, it is a draw." });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
@@ -472,16 +473,26 @@ app.post("/api/character/turn", async (req, res) => {
       if(playerJudge.correct){ sessions.delete(sessionId); return res.json({ok:true,done:true,winner:"player",win:true,name:s.name,answer:parsed.answer,hints:hintsOut,message:`🏆 You beat the AI Detective and solved it in round ${roundNow}!`,agent:{confidence:s.agent.confidence,status:s.agent.status}}); }
     }
 
-    // Agent sees exactly the same public evidence, never the secret name.
+    // Agent gets its own private turn. It never receives the player's Q/A.
     const decision=await runCharacterAgent(s,roundNow);
     s.agent.confidence=decision.confidence; s.agent.status=decision.status;
+    let agentQuestion = decision.question || null;
+    if (roundNow < 10 && agentQuestion) {
+      let agentPrivateAnswer = "";
+      try {
+        const agentQa = (s.agent.history || []).map((h,i)=>`Q${i+1}: ${h.q}\nA${i+1}: ${h.a}`).join("\n");
+        const agentParsed = JSON.parse(await chatCompletion(PROMPTS.characterTurn({name:s.name,qa:agentQa,round:roundNow,text:agentQuestion}),0.3,180));
+        agentPrivateAnswer = String(agentParsed.answer || "").trim();
+      } catch {}
+      if (agentPrivateAnswer) s.agent.history.push({q:agentQuestion,a:agentPrivateAnswer});
+    }
     if(roundNow<10 && decision.shouldGuess && decision.guess && !s.agent.guesses.some(g=>g.guess.toLowerCase()===decision.guess.toLowerCase())){
       const judged=await judgeCharacterGuess(s.name,decision.guess);
       s.agent.guesses.push({round:roundNow,guess:decision.guess,correct:judged.correct});
       if(judged.correct){ sessions.delete(sessionId); return res.json({ok:true,done:true,winner:"agent",win:false,name:s.name,answer:parsed.answer,hints:hintsOut,message:`🤖 AI Detective solved the mystery in round ${roundNow}!`,agent:{confidence:decision.confidence,status:"Solved the mystery!",guess:decision.guess}}); }
     }
 
-    res.json({ok:true,done:false,answer:parsed.answer,hints:hintsOut,round:roundNow,roundsLeft:10-roundNow,finalRoundReady:roundNow>=10,agent:{confidence:s.agent.confidence,status:s.agent.status}});
+    res.json({ok:true,done:false,answer:parsed.answer,hints:hintsOut,round:roundNow,roundsLeft:10-roundNow,finalRoundReady:roundNow>=10,agent:{confidence:s.agent.confidence,status:s.agent.status,question:agentQuestion}});
   } catch(e){ res.status(500).json({ok:false,error:e.message}); }
 });
 
