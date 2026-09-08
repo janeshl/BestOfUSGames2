@@ -53,8 +53,8 @@ Favorite place: ${favoritePlace}`,
 
   // Game 3: Guess the Character (hard)
   characterCandidates: (topic, excludeList = []) => [
-    { role: "system", content: `Select EXACTLY 5 people or fictional characters DIRECTLY and CLEARLY related to the exact user topic. Every candidate must have a strong, obvious connection. Never choose random famous people or loosely related names. Preserve the exact scope of the topic. Avoid: ${excludeList.join(", ") || "(none)"}. Return STRICT JSON ONLY: {"candidates":["name1","name2","name3","name4","name5"]}. No extra text.` },
-    { role: "user", content: `Exact topic: "${topic}". Select candidates ONLY directly related to this topic. JSON only.` },
+    { role: "system", content: `You are curating a HARD Guess the Character game. Select EXACTLY 8 distinct people or fictional characters directly and unmistakably related to the exact topic. Prefer medium-hard or hard choices: important but not the most obvious first answer. Avoid random celebrities, loosely related names, generic figures, and repeated characters. Preserve the exact topic scope. Never repeat any name or alter ego from this exclusion list: ${excludeList.join(", ") || "(none)"}. Return STRICT JSON ONLY: {"candidates":["name1","name2","name3","name4","name5","name6","name7","name8"]}. No extra text.` },
+    { role: "user", content: `Exact topic: "${topic}". Select hard, non-repetitive candidates ONLY directly related to this exact topic. JSON only.` },
   ],
 
   characterTurn: ({ name, qa, round, text }) => [
@@ -70,17 +70,22 @@ User message: ${text}` },
     { role: "user", content: "Generate the clue. JSON only." },
   ],
 
-  // Agentic character detective: agent never receives the secret character name
+  // Agentic detective: private reasoning, candidate ranking and its own question. The secret name is never sent here.
   characterAgent: ({ topic, history, clues, round, previousGuesses }) => [
-    { role: "system", content: `You are an autonomous AI Detective competing against a human to identify a secret person or fictional character. You DO NOT know the secret name. Use ONLY the public topic, player questions, Game Master answers, public clues, and your own previous guesses. Current round: ${round}. Return STRICT JSON ONLY: {"confidence":0,"shouldGuess":false,"guess":null,"status":"short public status"}. Rules: confidence is 0-100; do not guess randomly; normally wait before round 5; you may guess early only when confidence >=80; from rounds 8-9 become more aggressive; on round 10 you MUST provide your best guess; never claim certainty without evidence. No markdown.` },
-    { role: "user", content: `Topic: ${topic}
-History:
+    { role: "system", content: `You are an autonomous expert detective competing in a hard Guess the Character game. You DO NOT know the secret name. You may use ONLY your own private Q&A history, public clues, the exact topic, and your previous guesses. Never use the player's private questions or answers. Analyze evidence deeply: eliminate candidates that contradict evidence, maintain a ranked shortlist, and ask the single most information-rich next question. Return STRICT JSON ONLY: {"analysis":"private concise reasoning","topCandidates":[{"name":"string","confidence":0},{"name":"string","confidence":0},{"name":"string","confidence":0}],"confidence":0,"question":"string or null","shouldGuess":false,"guess":null,"status":"short public status"}. Rules: exactly 3 plausible ranked candidates whenever evidence allows; confidence 0-100; never guess randomly; before round 5 normally investigate; early guess only at confidence >=85; rounds 8-9 use clues aggressively; round 10 must provide best guess; do not reveal private analysis or candidate names in status; ask a question that can discriminate between leading candidates. No markdown.` },
+    { role: "user", content: `Exact topic: ${topic}
+
+YOUR PRIVATE Q&A HISTORY:
 ${history || "(none)"}
-Clues:
+
+PUBLIC CLUES:
 ${clues || "(none)"}
-Previous agent guesses:
+
+YOUR PREVIOUS GUESSES:
 ${previousGuesses || "(none)"}
-Analyze the evidence and decide.` }
+
+Current round: ${round}
+Analyze deeply and choose your next action.` }
   ],
 
   characterGuessJudge: ({ secretName, guess }) => [
@@ -418,11 +423,13 @@ async function runCharacterAgent(s, round) {
       shouldGuess: Boolean(parsed.shouldGuess),
       guess: typeof parsed.guess === "string" && parsed.guess.trim() ? parsed.guess.trim() : null,
       status: typeof parsed.status === "string" && parsed.status.trim() ? parsed.status.trim() : "Investigating the evidence...",
+      analysis: typeof parsed.analysis === "string" ? parsed.analysis.trim() : "",
+      topCandidates: Array.isArray(parsed.topCandidates) ? parsed.topCandidates.slice(0,3) : [],
       question: typeof parsed.question === "string" && parsed.question.trim() ? parsed.question.trim() : null
     };
   } catch (err) {
     console.error("Character agent failed:", err.message);
-    return { confidence: 0, shouldGuess: false, guess: null, status: "Investigating the evidence...", question: null };
+    return { confidence: 0, shouldGuess: false, guess: null, status: "Investigating the evidence...", analysis:"", topCandidates:[], question: null };
   }
 }
 
@@ -439,9 +446,9 @@ app.post("/api/character/start", async (req, res) => {
     if (!valid.length) return res.status(500).json({ ok:false, error:"Unable to find characters directly related to this topic. Please try again." });
     const lowerRecent = exclude.map((x) => x.toLowerCase());
     const name = valid.find((c) => !lowerRecent.includes(c.toLowerCase())) || valid[0];
-    recentByTopic.set(topic, [name, ...exclude].slice(0, 5));
+    recentByTopic.set(topic, [name, ...exclude].slice(0, 20));
     const id = makeId();
-    sessions.set(id, { type:"character", topic, name, rounds:0, history:[], clues:[], createdAt:Date.now(), agent:{ guesses:[], history:[], confidence:0, status:"Ready to investigate" } });
+    sessions.set(id, { type:"character", topic, name, rounds:0, history:[], clues:[], createdAt:Date.now(), agent:{ guesses:[], history:[], confidence:0, status:"Ready to investigate", analysis:"", topCandidates:[] } });
     res.json({ ok:true, sessionId:id, message:"You are competing against an AI Detective. Both of you investigate the same public evidence. The first correct early guess wins. After round 10, both submit final guesses; if both are correct, it is a draw." });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
@@ -475,7 +482,7 @@ app.post("/api/character/turn", async (req, res) => {
 
     // Agent gets its own private turn. It never receives the player's Q/A.
     const decision=await runCharacterAgent(s,roundNow);
-    s.agent.confidence=decision.confidence; s.agent.status=decision.status;
+    s.agent.confidence=decision.confidence; s.agent.status=decision.status; s.agent.analysis=decision.analysis; s.agent.topCandidates=decision.topCandidates;
     let agentQuestion = decision.question || null;
     if (roundNow < 10 && agentQuestion) {
       let agentPrivateAnswer = "";
