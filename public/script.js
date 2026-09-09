@@ -822,10 +822,10 @@ function html(e,m){if(e)e.innerHTML=m}
   const nextBtn = document.getElementById('mystery-next');
 
   let token = null, timer = null, timeLeft = 30, locked = false;
-  let score = {player:0, logic:0, lateral:0};
+  let score = {player:0, detective1:0, detective2:0};
 
   const clearTimer = () => { if(timer){ clearInterval(timer); timer=null; } };
-  const updateScore = () => scoreEl.textContent = `You ${score.player} · Logic AI ${score.logic} · Lateral AI ${score.lateral}`;
+  const updateScore = () => scoreEl.textContent = `You ${score.player} · Detective 1 ${score.detective1} · Detective 2 ${score.detective2}`;
 
   function renderRound(m){
     area.classList.remove('hidden');
@@ -858,7 +858,7 @@ function html(e,m){if(e)e.innerHTML=m}
       const res=await fetch('/api/mystery/start',{method:'POST'});
       const json=await res.json();
       if(!res.ok||!json.ok) throw new Error(json.error||`Unable to start game (HTTP ${res.status}).`);
-      token=json.token; score={player:0,logic:0,lateral:0}; updateScore(); startWrap.classList.add('hidden'); renderRound(json);
+      token=json.token; score={player:0,detective1:0,detective2:0}; updateScore(); startWrap.classList.add('hidden'); renderRound(json);
     }catch(err){
       startBtn.disabled=false; startBtn.textContent='Start Mystery Game';
       startWrap.insertAdjacentHTML('beforeend',`<div class="pill" style="margin-top:10px;">❌ ${String(err.message||'Unable to start game.')}</div>`);
@@ -869,7 +869,7 @@ function html(e,m){if(e)e.innerHTML=m}
     e.preventDefault();
     if(locked||!token||timeLeft>0) return;
     locked=true; submitBtn.disabled=true; answerEl.disabled=true; clearTimer();
-    waitEl.textContent='🤖 Logic AI and Lateral AI are solving independently...';
+    waitEl.textContent='🤖 Detective 1 and Detective 2 are solving independently...';
     try{
       const res=await fetch('/api/mystery/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,answer:answerEl.value.trim()})});
       const json=await res.json();
@@ -877,11 +877,14 @@ function html(e,m){if(e)e.innerHTML=m}
       score=json.score; updateScore();
       const r=json.result;
       resultEl.style.display='block';
-      resultEl.textContent = `YOUR ANSWER: ${r.player.answer}\n${r.player.correct?'✅ CORRECT':'❌ WRONG'} — ${r.player.reason}\n\nLOGIC AI: ${r.logic.answer}\n${r.logic.correct?'✅ CORRECT':'❌ WRONG'} — ${r.logic.reason}\n\nLATERAL AI: ${r.lateral.answer}\n${r.lateral.correct?'✅ CORRECT':'❌ WRONG'} — ${r.lateral.reason}\n\nCANONICAL SOLUTION: ${r.canonicalAnswer}`;
+      resultEl.textContent = `YOUR ANSWER: ${r.player.answer}\n${r.player.correct?'✅ CORRECT':'❌ WRONG'} — ${r.player.reason}\n\nDETECTIVE 1: ${r.detective1.answer}\n${r.detective1.correct?'✅ CORRECT':'❌ WRONG'} — ${r.detective1.reason}\n\nDETECTIVE 2: ${r.detective2.answer}\n${r.detective2.correct?'✅ CORRECT':'❌ WRONG'} — ${r.detective2.reason}\n\nCANONICAL SOLUTION: ${r.canonicalAnswer}`;
       if(json.done){
-        const winnerLabel={player:'YOU',logic:'LOGIC AI',lateral:'LATERAL AI',tie:'TIE'}[json.winner]||json.winner;
+        const winnerLabel={player:'YOU',detective1:'DETECTIVE 1',detective2:'DETECTIVE 2',tie:'TIE'}[json.winner]||json.winner;
+        const finalCard = `\n\n━━━━━━━━ FINAL SCORECARD ━━━━━━━━\nYOU          ${json.score.player}/5\nDETECTIVE 1  ${json.score.detective1}/5\nDETECTIVE 2  ${json.score.detective2}/5\n\n🏆 WINNER: ${winnerLabel}`;
+        resultEl.textContent += finalCard;
         waitEl.textContent=`🏆 Game complete! Winner: ${winnerLabel}`;
         submitBtn.style.display='none';
+        nextBtn.classList.add('hidden');
         return;
       }
       waitEl.textContent='✅ Round results are shown. Click Next Question when you are ready.';
