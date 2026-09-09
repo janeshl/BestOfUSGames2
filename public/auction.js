@@ -21,16 +21,17 @@ function render(){
   if(!state)return;
   if(state.done){
     clearInterval(syncTimer);
-    app.innerHTML=`<div class="auction-results card"><h2>🏆 Auction Complete</h2><p>The main auction is followed by the <b>Unsold Players</b> second-chance pool. Every unsold player gets one more opportunity. Teams with fewer than 5 buys or without at least 1 batsman, 1 bowler and 1 wicket keeper are disqualified.</p><div class="auction-final-rules"><b>Winner assessment:</b> player ratings, squad variety, role availability, purse-spending tactic and overall auction strategy.</div><button class="btn" onclick="results()"><span>Evaluate Teams</span></button><div id="results"></div></div>`;
+    app.innerHTML=`<div class="auction-results card"><h2>🏆 Auction Complete</h2><p>The main auction is followed by the <b>Unsold Players</b> second-chance pool. Every unsold player gets one more opportunity unless all 3 teams finish their squads and you choose to finish early. Teams with fewer than 5 buys or without at least 1 batsman, 1 bowler and 1 wicket keeper are disqualified.</p><div class="auction-final-rules"><b>Winner assessment:</b> player ratings, squad variety, role availability, purse-spending tactic and overall auction strategy.</div><button class="btn" onclick="results()"><span>Evaluate Teams</span></button><div id="results"></div></div>`;
     return;
   }
   const p=state.current;
   if(!p){ app.innerHTML='<div class="card"><h2>Preparing the next auction pool…</h2></div>'; return; }
-  const counts=state.poolCounts||{'Batsmen':6,'Bowlers':6,'All Rounders':5,'Wicket Keepers':3};
+  const counts=state.poolCounts||{'Batsmen':6,'Wicket Keepers':3,'Bowlers':6,'All Rounders':5};
   const poolSummary=Object.entries(counts).map(([role,n])=>`<span>${roleIcon(role)} ${esc(role)}: ${n}</span>`).join('');
   const waiting=state.waitingForClose, close=closeRemaining();
   const leader=state.currentBidder?state.teams[state.currentBidder].name:null;
   const yourTeam=state.teams?.player, squadComplete=yourTeam&&yourTeam.squad.length>=6;
+  const allTeamsComplete=!!state.rules?.allTeamsComplete;
   const finalChance=!!state.finalChance;
   const closeReady=!!state.closeReady;
   const status=finalChance
@@ -44,18 +45,18 @@ function render(){
   const teamBoxes=teamIds.map(id=>{
     const t=state.teams[id], sig=state.teamSignals?.[id], c=roleCounts(t);
     const isPlayer=id==='player';
-    const disabled=squadComplete||waiting||closeReady||bidBusy;
+    const disabled=squadComplete||bidBusy;
     return `<div class="auction-team-box ${isPlayer?'player-team-box':''} ${sig?.type==='bid'?'bid-flash':''}">
       <div class="auction-team-box-head"><div><strong>${esc(t.name)}</strong><small>${t.squad.length}/6 players · Purse ${money(t.purse)}</small></div><div class="auction-bid-symbol">${sig?.type==='bid'?'💰':''}</div></div>
       <div class="auction-role-mini">🏏 ${c['Batsmen']||0} · 🎯 ${c['Bowlers']||0} · ⭐ ${c['All Rounders']||0} · 🧤 ${c['Wicket Keepers']||0}</div>
       <div class="auction-team-action">${isPlayer
-        ? `<button class="btn auction-bid-btn" ${disabled?'disabled':''} onclick="bid()"><span>${squadComplete?'🔒 Squad Complete':'💰 Bid + ₹0.5 Cr'}</span></button><button class="btn auction-skip-btn" ${bidBusy||!finalChance?'disabled':''} onclick="skipPlayer()"><span>🚫 No Interest</span></button>`
+        ? `<button class="btn auction-bid-btn" ${disabled?'disabled':''} onclick="bid()"><span>${squadComplete?'🔒 Squad Complete':'💰 Bid + ₹0.5 Cr'}</span></button><button class="btn auction-skip-btn" ${bidBusy||squadComplete?'disabled':''} onclick="skipPlayer()"><span>🚫 Skip / No Interest</span></button>`
         : `<div class="ai-live-action ${sig?.type==='bid'?'active':''}">${sig?.type==='bid'?`💰 ${esc(sig.text)}`:'🤖 Waiting / NO INTEREST'}</div>`}</div>
       <div class="auction-squad-mini">${t.squad.map(x=>`${esc(x.name)} (${money(x.price)})`).join(', ')||'No purchases yet'}</div>
     </div>`;
   }).join('');
   app.innerHTML=`
-    <div class="auction-rules card compact-rules"><div><b>${state.phase==='unsold'?'🔁 Unsold Players — Second Chance Pool':'🏏 20-player Main Auction'}</b> · No fixed countdown</div><div class="auction-pool-list">${poolSummary}</div><div><b>Squad:</b> 5–6 buys · 🧤 WK + 🏏 batsman + 🎯 bowler required · Bidding locks at 6 players</div></div>
+    <div class="auction-rules card compact-rules"><div><b>${state.phase==='unsold'?'🔁 Unsold Players — Second Chance Pool':'🏏 20-player Main Auction'}</b> · No fixed countdown</div><div class="auction-pool-list">${poolSummary}</div><div><b>Squad:</b> 5–6 buys · 🧤 WK + 🏏 batsman + 🎯 bowler required · Bidding locks at 6 players · Skip anytime; no interested team = UNSOLD</div></div>
     <div class="auction-top-compact">
       <div class="auction-player-card card">
         <div class="auction-player-head"><h2>${esc(p.name)}</h2><span class="auction-tag">${esc(p.pool)}</span></div>
@@ -67,7 +68,7 @@ function render(){
       <div class="auction-log card"><h3>Live Auction Updates</h3><div class="auction-log-scroll">${state.logs.slice().reverse().map(x=>`<p>${esc(x)}</p>`).join('')}</div></div>
     </div>
     <div class="auction-teams-bottom">${teamBoxes}</div>
-    <div class="auction-next-row">${state.auctionClosed?`<div class="auction-closed">🔨 ${state.currentBidder?'SOLD':'UNSOLD'} — Auction closed.</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?(state.phase==='main'?'Open Unsold Players Pool →':'Finish Auction'):'Next Player →'}</span></button>`:closeReady?`<button class="btn auction-close-btn" onclick="closeAuction()"><span>🔨 Close Auction</span></button>`:''}</div>`;
+    <div class="auction-next-row">${state.auctionClosed?`<div class="auction-closed">🔨 ${state.currentBidder?'SOLD':'UNSOLD'} — Auction closed.</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?(state.phase==='main'?'Open Unsold Players Pool →':'Finish Auction'):'Next Player →'}</span></button>`:closeReady?`<button class="btn auction-close-btn" onclick="closeAuction()"><span>🔨 Close Auction</span></button>`:''}${allTeamsComplete?`<button class="btn auction-finish-btn" onclick="finishAuction()"><span>🏁 Finish Auction Now</span></button>`:''}</div>`;
 }
 
 async function start(){
@@ -80,6 +81,7 @@ async function bid(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/au
 async function skipPlayer(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/auction/skip',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
 async function closeAuction(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/auction/close',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
 async function nextPlayer(){try{state=await api('/api/auction/next',{sessionId:sid});render()}catch(e){alert(e.message)}}
+async function finishAuction(){if(bidBusy)return;if(!confirm('All 3 teams have completed their 6-player squads. Finish the auction now?'))return;bidBusy=true;try{state=await api('/api/auction/finish',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
 async function results(){
   try{const r=await api('/api/auction/results',{sessionId:sid});document.getElementById('results').innerHTML=`<h2>🏆 Winner: ${esc(r.winner.name)} ${r.winner.disqualified?'(all teams disqualified)':''}</h2>`+r.ranked.map((x,i)=>{const b=x.analysis?.breakdown||{},roles=x.analysis?.roleCounts||{};const status=x.disqualified?`❌ DISQUALIFIED — ${esc((x.analysis?.reasons||[]).join('; '))}`:`✅ Eligible`;return `<div class="card auction-result-card"><h3>#${i+1} ${esc(x.name)} — ${x.score}/100</h3><p><b>${status}</b></p><p>Rating: ${x.analysis?.avgRating||0} avg · Spent: ${money(x.spent)} · Remaining: ${money(x.remaining)} · Avg buy: ${money(x.analysis?.avgPrice||0)}</p><p>🏏 ${roles['Batsmen']||0} · 🎯 ${roles['Bowlers']||0} · ⭐ ${roles['All Rounders']||0} · 🧤 ${roles['Wicket Keepers']||0}</p><p><b>Assessment:</b> Rating ${b.rating||0}/25 · Variety ${b.variety||0}/20 · Role availability ${b.roleAvailability||0}/20 · Squad completeness ${b.squadCompleteness||0}/10 · Spending tactic ${b.spendingTactic||0}/15 · Strategy/fit ${b.strategyFit||0}/10</p><p><b>Players:</b> ${x.squad.map(p=>`${esc(p.name)} — ${money(p.price)}`).join(', ')||'No players purchased'}</p></div>`}).join('')}
   catch(e){alert(e.message)}
