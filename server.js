@@ -247,21 +247,58 @@ JSON only.`,
 /* ------------------------
    Groq Chat Completion
 ------------------------- */
-async function chatCompletion(messages, temperature = 0.7, max_tokens = 256) {
-  const res = await fetch(GROQ_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${GROQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model: GROQ_MODEL, messages, temperature, max_tokens }),
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Groq API ${res.status}: ${t}`);
+function parseModelJson(raw) {
+  if (typeof raw !== "string") throw new Error("Model returned an empty response.");
+  let text = raw.trim();
+  if (text.startsWith("```")) {
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   }
-  const data = await res.json();
-  return data?.choices?.[0]?.message?.content?.trim() ?? "";
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first >= 0 && last > first) text = text.slice(first, last + 1);
+  return JSON.parse(text);
+}
+
+async function chatCompletion(messages, temperature = 0.7, max_tokens = 256, options = {}) {
+  if (!GROQ_API_KEY) throw new Error("Groq API key is missing. Set GROQ_API_KEY or QROQ_API_KEY in .env.");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 45000);
+
+  try {
+    const body = {
+      model: GROQ_MODEL,
+      messages,
+      temperature,
+      max_tokens,
+    };
+    if (options.json) body.response_format = { type: "json_object" };
+
+    const res = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Groq API ${res.status}: ${t.slice(0, 500)}`);
+    }
+
+    const data = await res.json();
+    const content = data?.choices?.[0]?.message?.content?.trim();
+    if (!content) throw new Error("Groq returned an empty completion.");
+    return content;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("Groq request timed out. Please try again.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /* ========================
@@ -402,8 +439,8 @@ app.post("/api/quiz/answer", (req, res) => {
 async function judgeCharacterGuess(secretName, guess) {
   if (!guess || !String(guess).trim()) return { correct: false, reason: "No guess submitted." };
   try {
-    const raw = await chatCompletion(PROMPTS.characterGuessJudge({ secretName, guess: String(guess).trim() }), 0, 180);
-    const parsed = JSON.parse(raw);
+    const raw = await chatCompletion(PROMPTS.characterGuessJudge({ secretName, guess: String(guess).trim() }), 0, 300, { json: true });
+    const parsed = parseModelJson(raw);
     return { correct: Boolean(parsed.correct), reason: String(parsed.reason || "") };
   } catch {
     const normalize = (v) => String(v).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -416,8 +453,8 @@ async function runCharacterAgent(s, round) {
   const clues = (s.clues || []).map((c, i) => `Round ${i + 8} clue: ${c}`).join("\n");
   const previousGuesses = (s.agent.guesses || []).map((g) => `${g.guess} (${g.correct ? "correct" : "wrong"})`).join(", ");
   try {
-    const raw = await chatCompletion(PROMPTS.characterAgent({ topic: s.topic, history, clues, round, previousGuesses }), 0.35, 300);
-    const parsed = JSON.parse(raw);
+    const raw = await chatCompletion(PROMPTS.characterAgent({ topic: s.topic, history, clues, round, previousGuesses }), 0.25, 900, { json: true });
+    const parsed = parseModelJson(raw);
     return {
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
       shouldGuess: Boolean(parsed.shouldGuess),
@@ -435,22 +472,62 @@ async function runCharacterAgent(s, round) {
 
 app.post("/api/character/start", async (req, res) => {
   try {
-    const { topic = "General" } = req.body ?? {};
-    const exclude = recentByTopic.get(topic) || [];
+    const topic = String(req.body?.topic || "").trim();
+    if (topic.length < 2) return res.status(400).json({ ok:false, error:"Please enter a valid topic." });
+    if (topic.length > 120) return res.status(400).json({ ok:false, error:"Topic is too long." });
+
+    const topicKey = topic.toLowerCase();
+    const exclude = recentByTopic.get(topicKey) || [];
     let candidates = [];
-    try {
-      const parsed = JSON.parse(await chatCompletion(PROMPTS.characterCandidates(topic, exclude), 0.7, 220));
-      if (Array.isArray(parsed.candidates)) candidates = parsed.candidates;
-    } catch {}
-    const valid = candidates.map((c) => String(c).trim()).filter(Boolean);
-    if (!valid.length) return res.status(500).json({ ok:false, error:"Unable to find characters directly related to this topic. Please try again." });
-    const lowerRecent = exclude.map((x) => x.toLowerCase());
-    const name = valid.find((c) => !lowerRecent.includes(c.toLowerCase())) || valid[0];
-    recentByTopic.set(topic, [name, ...exclude].slice(0, 20));
+    let lastError = null;
+
+    // Retry once because structured output can occasionally fail on reasoning models.
+    for (let attempt = 0; attempt < 2 && candidates.length === 0; attempt++) {
+      try {
+        const raw = await chatCompletion(
+          PROMPTS.characterCandidates(topic, exclude),
+          0.55,
+          1000,
+          { json: true, timeoutMs: 60000 }
+        );
+        const parsed = parseModelJson(raw);
+        if (Array.isArray(parsed.candidates)) {
+          candidates = parsed.candidates
+            .map(c => String(c || "").trim())
+            .filter(c => c.length >= 2 && c.length <= 100);
+        }
+      } catch (err) {
+        lastError = err;
+        console.error("Character candidate generation attempt failed:", err.message);
+      }
+    }
+
+    const unique = [...new Map(candidates.map(c => [c.toLowerCase(), c])).values()];
+    const lowerRecent = new Set(exclude.map(x => String(x).toLowerCase()));
+    const fresh = unique.filter(c => !lowerRecent.has(c.toLowerCase()));
+    const valid = fresh.length ? fresh : unique;
+
+    if (!valid.length) {
+      return res.status(502).json({
+        ok:false,
+        error: lastError?.message || "Groq could not generate a valid character list. Please try again."
+      });
+    }
+
+    const name = valid[Math.floor(Math.random() * valid.length)];
+    recentByTopic.set(topicKey, [name, ...exclude.filter(x => String(x).toLowerCase() !== name.toLowerCase())].slice(0, 30));
+
     const id = makeId();
-    sessions.set(id, { type:"character", topic, name, rounds:0, history:[], clues:[], createdAt:Date.now(), agent:{ guesses:[], history:[], confidence:0, status:"Ready to investigate", analysis:"", topCandidates:[] } });
-    res.json({ ok:true, sessionId:id, message:"You are competing against an AI Detective. Both of you investigate the same public evidence. The first correct early guess wins. After round 10, both submit final guesses; if both are correct, it is a draw." });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+    sessions.set(id, {
+      type:"character", topic, name, rounds:0, history:[], clues:[], createdAt:Date.now(),
+      agent:{ guesses:[], history:[], confidence:0, status:"Ready to investigate", analysis:"", topCandidates:[] }
+    });
+
+    res.json({ ok:true, sessionId:id, message:"Battle started." });
+  } catch (e) {
+    console.error("Character start failed:", e);
+    res.status(500).json({ ok:false, error:e.message || "Unable to start the battle." });
+  }
 });
 
 app.post("/api/character/turn", async (req, res) => {
@@ -461,7 +538,7 @@ app.post("/api/character/turn", async (req, res) => {
     if (s.rounds >= 10) return res.status(400).json({ ok:false, error:"All 10 rounds are complete. Submit your final guess." });
     const qa = s.history.map((h,i)=>`Q${i+1}: ${h.q}\nA${i+1}: ${h.a}`).join("\n");
     let parsed={answer:"Okay.",isGuess:false,guessedName:"",hints:[]};
-    try { parsed=JSON.parse(await chatCompletion(PROMPTS.characterTurn({name:s.name,qa,round:s.rounds+1,text}),0.4,280)); } catch {}
+    try { parsed=parseModelJson(await chatCompletion(PROMPTS.characterTurn({name:s.name,qa,round:s.rounds+1,text}),0.3,700,{json:true})); } catch (err) { console.error("Character turn parse failed:", err.message); }
     s.rounds += 1;
     s.history.push({q:text||"",a:parsed.answer||""});
     const roundNow=s.rounds;
@@ -469,7 +546,7 @@ app.post("/api/character/turn", async (req, res) => {
     if (roundNow>=8) {
       const arr=Array.isArray(parsed.hints)?parsed.hints.filter(h=>typeof h==="string"&&h.trim()):[];
       if(arr.length) hintsOut=[arr[0].trim()];
-      if(!hintsOut.length){ try { const hp=JSON.parse(await chatCompletion(PROMPTS.characterHint({name:s.name,topic:s.topic,round:roundNow}),0.4,150)); if(hp?.hint?.trim()) hintsOut=[hp.hint.trim()]; } catch{} }
+      if(!hintsOut.length){ try { const hp=parseModelJson(await chatCompletion(PROMPTS.characterHint({name:s.name,topic:s.topic,round:roundNow}),0.3,350,{json:true})); if(hp?.hint?.trim()) hintsOut=[hp.hint.trim()]; } catch(err){ console.error("Character hint failed:", err.message); } }
       if(!hintsOut.length) hintsOut=[`This character has a strong and direct connection to the topic: ${s.topic}.`];
       s.clues.push(hintsOut[0]);
     }
@@ -488,7 +565,7 @@ app.post("/api/character/turn", async (req, res) => {
       let agentPrivateAnswer = "";
       try {
         const agentQa = (s.agent.history || []).map((h,i)=>`Q${i+1}: ${h.q}\nA${i+1}: ${h.a}`).join("\n");
-        const agentParsed = JSON.parse(await chatCompletion(PROMPTS.characterTurn({name:s.name,qa:agentQa,round:roundNow,text:agentQuestion}),0.3,180));
+        const agentParsed = parseModelJson(await chatCompletion(PROMPTS.characterTurn({name:s.name,qa:agentQa,round:roundNow,text:agentQuestion}),0.2,500,{json:true}));
         agentPrivateAnswer = String(agentParsed.answer || "").trim();
       } catch {}
       if (agentPrivateAnswer) s.agent.history.push({q:agentQuestion,a:agentPrivateAnswer});
