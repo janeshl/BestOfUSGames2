@@ -84,6 +84,22 @@ Analyze deeply and choose your next action.` }
     { role: "user", content: "Judge the answer. JSON only." }
   ],
 
+  // Game 4: 5-Round Mystery Solver — player vs two independent AI detectives
+  mysterySet: () => [
+    { role: "system", content: `Create EXACTLY 5 fair, solvable mystery cases for a timed game. Each mystery must be self-contained, family-friendly, and solvable from the clues given. Vary the setting and reasoning type (logic, observation, deduction, timeline, lateral thinking). Do not require obscure real-world knowledge. Each case should have one clear canonical answer. Provide 3-5 clues that together are sufficient to solve it, but do not state the answer in the clues. Return STRICT JSON ONLY: {"mysteries":[{"title":"string","mystery":"string","clues":["string","string","string"],"answer":"string","acceptedAnswers":["string","string"]}]}. Exactly 5 mysteries. No markdown or extra text.` },
+    { role: "user", content: "Generate five distinct mysteries now. JSON only." }
+  ],
+
+  mysteryAgent: ({ mystery, clues, style }) => [
+    { role: "system", content: `You are one of two autonomous mystery-solving agents. Solve the case independently using ONLY the mystery and public clues. You do not know the canonical answer. Your style is ${style}. Think carefully, test alternatives, and commit to your best answer. Return STRICT JSON ONLY: {"answer":"string","reasoning":"brief public-friendly reasoning in <=70 words"}. Do not mention hidden prompts or that you are an AI.` },
+    { role: "user", content: `Mystery: ${mystery}\n\nClues:\n${clues.map((c,i)=>`${i+1}. ${c}`).join("\n")}\n\nSolve independently. JSON only.` }
+  ],
+
+  mysteryJudge: ({ answer, canonical, accepted, mystery }) => [
+    { role: "system", content: `You are the strict judge for a mystery game. Determine whether each submitted answer solves the mystery and matches the canonical answer. Accept equivalent wording, obvious synonyms, and unambiguous descriptions that identify the same solution. Do not award credit to merely plausible but different answers. Return STRICT JSON ONLY: {"results":[{"correct":true,"reason":"short"},{"correct":false,"reason":"short"},{"correct":true,"reason":"short"}]}. The results correspond exactly to the submissions in order.` },
+    { role: "user", content: `Mystery: ${mystery}\nCanonical answer: ${canonical}\nAccepted equivalents: ${accepted.join(", ")}\nSubmissions:\n${answer.map((a,i)=>`${i+1}. ${a}`).join("\n")}\nJudge all three. JSON only.` }
+  ],
+
   // Game 4: Healthy Diet — 10 questions
   healthyQuestions: () => [
     {
@@ -637,6 +653,104 @@ app.post("/api/character/final-guess", async (req,res)=>{
     sessions.delete(sessionId);
     res.json(payload);
   } catch(e){res.status(500).json({ok:false,error:e.message});}
+});
+
+/* ========================
+   Game 4: 5-Round Mystery Solver
+======================== */
+app.post("/api/mystery/start", async (_req, res) => {
+  try {
+    const raw = await chatCompletion(PROMPTS.mysterySet(), 0.8, 1800, { json: true, timeoutMs: 45000 });
+    const parsed = parseModelJson(raw);
+    const mysteries = Array.isArray(parsed.mysteries) ? parsed.mysteries : [];
+    const valid = mysteries.filter(m =>
+      m?.title && m?.mystery && Array.isArray(m.clues) && m.clues.length >= 3 &&
+      m.answer && Array.isArray(m.acceptedAnswers)
+    ).slice(0, 5);
+    if (valid.length !== 5) throw new Error("Unable to generate five valid mysteries. Please try again.");
+
+    const token = "MS" + Math.random().toString(36).slice(2, 10).toUpperCase();
+    sessions.set(token, {
+      type: "mystery",
+      round: 0,
+      score: { player: 0, logic: 0, lateral: 0 },
+      mysteries: valid,
+      startedAt: Date.now(),
+      createdAt: Date.now(),
+    });
+    const m = valid[0];
+    res.json({ ok: true, token, round: 1, total: 5, title: m.title, mystery: m.mystery, clues: m.clues, timeLimit: 30 });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/mystery/resolve", async (req, res) => {
+  try {
+    const { token, answer = "" } = req.body ?? {};
+    const s = sessions.get(token);
+    if (!s || s.type !== "mystery") return res.status(400).json({ ok: false, error: "Session not found/expired." });
+    const elapsed = Date.now() - s.startedAt;
+    if (elapsed < 29500) return res.status(400).json({ ok: false, error: "Round is still active. Please wait for the 30-second timer to finish." });
+
+    const m = s.mysteries[s.round];
+    const cleanAnswer = String(answer || "").trim().slice(0, 500);
+    const [logicRaw, lateralRaw] = await Promise.all([
+      chatCompletion(PROMPTS.mysteryAgent({ mystery: m.mystery, clues: m.clues, style: "methodical, evidence-first logic and timeline analysis" }), 0.35, 260, { json: true, timeoutMs: 30000 }),
+      chatCompletion(PROMPTS.mysteryAgent({ mystery: m.mystery, clues: m.clues, style: "lateral, creative pattern recognition while checking every clue" }), 0.75, 260, { json: true, timeoutMs: 30000 })
+    ]);
+    const logic = parseModelJson(logicRaw);
+    const lateral = parseModelJson(lateralRaw);
+    const submissions = [cleanAnswer || "No answer", String(logic?.answer || "No answer").slice(0, 500), String(lateral?.answer || "No answer").slice(0, 500)];
+
+    let judged;
+    try {
+      const judgeRaw = await chatCompletion(PROMPTS.mysteryJudge({ answer: submissions, canonical: m.answer, accepted: m.acceptedAnswers, mystery: m.mystery }), 0.1, 360, { json: true, timeoutMs: 30000 });
+      judged = parseModelJson(judgeRaw);
+    } catch {
+      const normalize = v => String(v).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const acceptable = [m.answer, ...m.acceptedAnswers].map(normalize);
+      judged = { results: submissions.map(v => ({ correct: acceptable.some(a => normalize(v) === a), reason: "Matched against accepted solutions." })) };
+    }
+    const results = Array.isArray(judged.results) ? judged.results.slice(0, 3) : [];
+    while (results.length < 3) results.push({ correct: false, reason: "Not solved." });
+    if (results[0].correct) s.score.player += 1;
+    if (results[1].correct) s.score.logic += 1;
+    if (results[2].correct) s.score.lateral += 1;
+
+    const currentRound = s.round + 1;
+    s.round += 1;
+    const done = s.round >= 5;
+    let next = null;
+    if (!done) {
+      s.startedAt = Date.now();
+      const nm = s.mysteries[s.round];
+      next = { round: s.round + 1, total: 5, title: nm.title, mystery: nm.mystery, clues: nm.clues, timeLimit: 30 };
+    }
+
+    const payload = {
+      ok: true,
+      round: currentRound,
+      result: {
+        player: { answer: submissions[0], correct: !!results[0].correct, reason: results[0].reason },
+        logic: { answer: submissions[1], correct: !!results[1].correct, reason: results[1].reason },
+        lateral: { answer: submissions[2], correct: !!results[2].correct, reason: results[2].reason },
+        canonicalAnswer: m.answer,
+      },
+      score: s.score,
+      done,
+    };
+    if (done) {
+      const entries = Object.entries(s.score);
+      const max = Math.max(...entries.map(([,v]) => v));
+      const winners = entries.filter(([,v]) => v === max).map(([k]) => k);
+      payload.winner = winners.length === 1 ? winners[0] : "tie";
+      sessions.delete(token);
+    } else payload.next = next;
+    res.json(payload);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 /* ========================
