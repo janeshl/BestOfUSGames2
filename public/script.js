@@ -819,6 +819,7 @@ function html(e,m){if(e)e.innerHTML=m}
   const submitBtn = document.getElementById('mystery-submit');
   const waitEl = document.getElementById('mystery-wait');
   const resultEl = document.getElementById('mystery-result');
+  const nextBtn = document.getElementById('mystery-next');
 
   let token = null, timer = null, timeLeft = 30, locked = false;
   let score = {player:0, logic:0, lateral:0};
@@ -838,6 +839,7 @@ function html(e,m){if(e)e.innerHTML=m}
     });
     answerEl.value=''; answerEl.disabled=false; submitBtn.disabled=true; locked=false;
     resultEl.style.display='none'; resultEl.textContent='';
+    nextBtn.classList.add('hidden');
     waitEl.textContent='⏳ You can prepare your answer now. Submission unlocks when the 30-second timer ends.';
     clearTimer(); timeLeft=30;
     timer=setInterval(()=>{
@@ -882,8 +884,9 @@ function html(e,m){if(e)e.innerHTML=m}
         submitBtn.style.display='none';
         return;
       }
-      waitEl.textContent='Round solved. Get ready for the next mystery...';
-      setTimeout(()=>renderRound(json.next),1600);
+      waitEl.textContent='✅ Round results are shown. Click Next Question when you are ready.';
+      nextBtn.classList.remove('hidden');
+      nextBtn.onclick = ()=>renderRound(json.next);
     }catch(err){
       locked=false; answerEl.disabled=false; submitBtn.disabled=false;
       waitEl.textContent='❌ '+String(err.message||'Unable to resolve the round.');
