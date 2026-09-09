@@ -49,7 +49,7 @@ function render(){
       <div class="auction-team-box-head"><div><strong>${esc(t.name)}</strong><small>${t.squad.length}/6 players · Purse ${money(t.purse)}</small></div><div class="auction-bid-symbol">${sig?.type==='bid'?'💰':''}</div></div>
       <div class="auction-role-mini">🏏 ${c['Batsmen']||0} · 🎯 ${c['Bowlers']||0} · ⭐ ${c['All Rounders']||0} · 🧤 ${c['Wicket Keepers']||0}</div>
       <div class="auction-team-action">${isPlayer
-        ? `<button class="btn auction-bid-btn" ${disabled?'disabled':''} onclick="bid()"><span>${squadComplete?'🔒 Squad Complete':'💰 Bid + ₹0.5 Cr'}</span></button><button class="btn auction-skip-btn" ${bidBusy||(!finalChance&&!state.current)?'disabled':''} onclick="skipPlayer()"><span>🚫 No Interest</span></button>`
+        ? `<button class="btn auction-bid-btn" ${disabled?'disabled':''} onclick="bid()"><span>${squadComplete?'🔒 Squad Complete':'💰 Bid + ₹0.5 Cr'}</span></button><button class="btn auction-skip-btn" ${bidBusy||!finalChance?'disabled':''} onclick="skipPlayer()"><span>🚫 No Interest</span></button>`
         : `<div class="ai-live-action ${sig?.type==='bid'?'active':''}">${sig?.type==='bid'?`💰 ${esc(sig.text)}`:'🤖 Waiting / NO INTEREST'}</div>`}</div>
       <div class="auction-squad-mini">${t.squad.map(x=>`${esc(x.name)} (${money(x.price)})`).join(', ')||'No purchases yet'}</div>
     </div>`;
@@ -71,7 +71,7 @@ function render(){
 }
 
 async function start(){
-  try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing 20-player Auction</h2><p>AI teams respond with a bid or NO INTEREST. After a player bid, the auctioneer gets a Close Auction button when 5 seconds pass without a higher bid.</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();clearInterval(syncTimer);syncTimer=setInterval(tick,900);}
+  try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing 20-player Auction</h2><p>AI teams respond with a bid or NO INTEREST. After the latest bid, the auctioneer gives a Final Call; the player can bid once more or choose No Interest. If the player makes that final bid and no AI raises for 5 seconds, the auctioneer can close and sell.</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();clearInterval(syncTimer);syncTimer=setInterval(tick,900);}
   catch(e){app.innerHTML=`<div class="card"><h2>Unable to start auction</h2><p>${esc(e.message)}</p><button class="btn" onclick="start()"><span>Try Again</span></button></div>`}
   finally{loading=false}
 }
