@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🕵️ Mystery Solver</title>
+  <link rel="stylesheet" href="styling.css" />
+</head>
+<body class="container">
+  <h2 class="section-title">🕵️ 5-Round Mystery Solver</h2>
+
+  <article class="card" id="mystery-card">
+    <div id="mystery-start-wrap">
+      <p class="card-copy">Solve five AI-generated mysteries against two different-thinking AI detectives. You have 30 seconds per round.</p>
+      <button class="btn" id="mystery-start"><span>Start Mystery Game</span></button>
+    </div>
+
+    <div id="mystery-area" class="hidden">
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <div class="badge" id="mystery-round">Round 1 of 5</div>
+        <div class="badge" id="mystery-timer">⏱ 30s</div>
+        <div class="badge" id="mystery-score">You 0 · Logic AI 0 · Lateral AI 0</div>
+      </div>
+      <h3 id="mystery-title" style="margin:14px 0 6px;"></h3>
+      <div id="mystery-text" class="card-copy" style="white-space:pre-wrap;"></div>
+      <div id="mystery-clues" class="list" style="margin:12px 0;"></div>
+
+      <form id="mystery-answer-form" class="game-form">
+        <textarea id="mystery-answer" placeholder="Type your solution here..." maxlength="500" required></textarea>
+        <button class="btn" id="mystery-submit" type="submit" disabled><span>Submit Answer</span></button>
+      </form>
+      <div id="mystery-wait" class="pill" style="margin-top:10px;">⏳ The three detectives will reveal their answers when time is up.</div>
+      <pre id="mystery-result" class="result" style="margin-top:12px;display:none;"></pre>
+    </div>
+  </article>
+
+  <div style="margin-top:24px;display:flex;justify-content:flex-start;">
+    <a href="./games.html" class="back">← Back</a>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
