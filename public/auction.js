@@ -71,11 +71,30 @@ function render(){
     <div class="auction-next-row">${state.auctionClosed?`<div class="auction-closed">🔨 ${state.currentBidder?'SOLD':'UNSOLD'} — Auction closed.</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?(state.phase==='main'?'Open Unsold Players Pool →':'Finish Auction'):'Next Player →'}</span></button>`:closeReady?`<button class="btn auction-close-btn" onclick="closeAuction()"><span>🔨 Close Auction</span></button>`:''}${allTeamsComplete?`<button class="btn auction-finish-btn" onclick="finishAuction()"><span>🏁 Finish Auction Now</span></button>`:''}</div>`;
 }
 
+function showStartScreen(message=''){
+  app.innerHTML=`<div class="card auction-start-card">
+    <h2>🏏 Start Your Cricket Auction</h2>
+    <p>Enter your team name before the auction begins. Your team will compete against the two AI team owners.</p>
+    <label for="teamNameInput"><b>Your Team Name</b></label>
+    <input id="teamNameInput" class="auction-team-name-input" type="text" maxlength="30" autocomplete="off" placeholder="e.g. Kerala Kings" value="" onkeydown="if(event.key==='Enter') start()">
+    ${message?`<p class="auction-form-error">${esc(message)}</p>`:''}
+    <button class="btn" onclick="start()"><span>🚀 Start Auction</span></button>
+  </div>`;
+  setTimeout(()=>document.getElementById('teamNameInput')?.focus(),0);
+}
+
 async function start(){
-  try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing 20-player Auction</h2><p>AI teams respond with a bid or NO INTEREST. After the latest bid, the auctioneer gives a Final Call; the player can bid once more or choose No Interest. If the player makes that final bid and no AI raises for 5 seconds, the auctioneer can close and sell.</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();clearInterval(syncTimer);syncTimer=setInterval(tick,900);}
-  catch(e){app.innerHTML=`<div class="card"><h2>Unable to start auction</h2><p>${esc(e.message)}</p><button class="btn" onclick="start()"><span>Try Again</span></button></div>`}
+  if(loading)return;
+  const input=document.getElementById('teamNameInput');
+  const teamName=(input?.value||'').trim();
+  if(!teamName){showStartScreen('Please enter a team name to start the auction.');return;}
+  if(teamName.length<2){showStartScreen('Team name must contain at least 2 characters.');return;}
+  try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing 20-player Auction</h2><p>AI teams respond with a bid or NO INTEREST. After the latest bid, the auctioneer gives a Final Call; the player can bid once more or choose No Interest. If the player makes that final bid and no AI raises for 5 seconds, the auctioneer can close and sell.</p></div>';state=await api('/api/auction/start',{teamName});sid=state.sessionId;render();clearInterval(syncTimer);syncTimer=setInterval(tick,900);}
+  catch(e){showStartScreen(e.message||'Unable to start auction.');}
   finally{loading=false}
 }
+
+showStartScreen();
 async function tick(){if(!sid||loading)return;try{state=await api('/api/auction/tick',{sessionId:sid});render()}catch(e){console.error('Auction sync:',e.message)}}
 async function bid(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/auction/bid',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
 async function skipPlayer(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/auction/skip',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
