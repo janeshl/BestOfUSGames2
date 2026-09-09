@@ -4,28 +4,6 @@ function setText(e,t){if(e)e.textContent=t}
 function html(e,m){if(e)e.innerHTML=m}
 
 /* ========================
-   Predict the Future
-======================== */
-(function(){
-  const form = $('#f-form');
-  const out = $('#f-out');
-  if(!form || !out) return;
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    setText(out, "🔮 Summoning prophecies...");
-    const data = { name: form.name?.value, birthMonth: form.birthMonth?.value, favoritePlace: form.place?.value };
-    try{
-      const res = await fetch('/api/predict-future', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data) });
-      const json = await res.json();
-      setText(out, json.ok ? json.content : ('Error: ' + (json.error || 'Unknown error')));
-      if (form.name) form.name.value='';
-      if (form.birthMonth) form.birthMonth.selectedIndex=0;
-      if (form.place) form.place.value='';
-    }catch{ setText(out, 'Network error. Please try again.'); }
-  });
-})();
-
-/* ========================
    5-Round Quiz
 ======================== */
 (function(){
@@ -143,17 +121,32 @@ function html(e,m){if(e)e.innerHTML=m}
     e.target.topic.value = '';
     optsEl.innerHTML = '<div class="pill">Preparing quiz...</div>';
     try{
-      const res  = await fetch('/api/quiz/start', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ topic })
-      });
-      const json = await res.json();
-      if(!json.ok){ optsEl.innerHTML = 'Error: ' + (json.error || 'Unknown error'); return; }
+      if(!topic){
+        optsEl.innerHTML = '<div class="pill">Please enter a topic first.</div>';
+        return;
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 35000);
+      let res;
+      try {
+        res = await fetch('/api/quiz/start', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ topic }),
+          signal: controller.signal
+        });
+      } finally { clearTimeout(timeout); }
+      let json;
+      try { json = await res.json(); }
+      catch { throw new Error(`Server returned HTTP ${res.status}.`); }
+      if(!res.ok || !json.ok || !json.token || !json.question || !Array.isArray(json.options) || json.options.length !== 4){
+        throw new Error(json.error || `Unable to start quiz (HTTP ${res.status}).`);
+      }
       token = json.token;
-      renderQuestion(json.idx, json.total, json.question, json.options);
-    }catch{
-      optsEl.innerHTML = 'Network error. Please try again.';
+      renderQuestion(json.idx || 1, json.total || 5, json.question, json.options);
+    }catch(err){
+      const message = err?.name === 'AbortError' ? 'Quiz generation timed out. Please try again.' : (err?.message || 'Network error. Please try again.');
+      optsEl.innerHTML = '<div class="pill">❌ '+message.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))+'</div>';
     }
   });
 })();
