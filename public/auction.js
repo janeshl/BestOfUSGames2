@@ -1,6 +1,13 @@
 let sid=null,state=null,timer=null,loading=false;
 const app=document.getElementById('auctionApp');
-async function api(url,data={}){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(!r.ok||j.ok===false)throw new Error(j.error||'Request failed');return j}
+async function api(url,data={}){
+ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+ const text=await r.text();
+ let j;
+ try{j=JSON.parse(text)}catch{throw new Error(text||`Request failed (${r.status})`)}
+ if(!r.ok||j.ok===false)throw new Error(j.error||j.message||`Request failed (${r.status})`);
+ return j;
+}
 function money(n){return `₹${Number(n).toFixed(1)} Cr`}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function render(){
