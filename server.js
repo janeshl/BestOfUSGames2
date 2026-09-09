@@ -695,9 +695,24 @@ app.post("/api/mystery/resolve", async (req, res) => {
 
     const m = s.mysteries[s.round];
     const cleanAnswer = String(answer || "").trim().slice(0, 500);
+    // GPT-OSS reasoning can consume completion tokens before emitting the final JSON.
+    // Give each detective enough room and fail soft so one bad generation cannot break the round.
+    const safeMysteryAgent = async (style) => {
+      try {
+        return await chatCompletion(
+          PROMPTS.mysteryAgent({ mystery: m.mystery, clues: m.clues, style }),
+          style.startsWith("lateral") ? 0.7 : 0.3,
+          1200,
+          { json: true, timeoutMs: 45000 }
+        );
+      } catch {
+        return JSON.stringify({ answer: "No answer", reasoning: "The detective could not complete its response." });
+      }
+    };
+
     const [logicRaw, lateralRaw] = await Promise.all([
-      chatCompletion(PROMPTS.mysteryAgent({ mystery: m.mystery, clues: m.clues, style: "methodical, evidence-first logic and timeline analysis" }), 0.35, 260, { json: true, timeoutMs: 30000 }),
-      chatCompletion(PROMPTS.mysteryAgent({ mystery: m.mystery, clues: m.clues, style: "lateral, creative pattern recognition while checking every clue" }), 0.75, 260, { json: true, timeoutMs: 30000 })
+      safeMysteryAgent("methodical, evidence-first logic and timeline analysis"),
+      safeMysteryAgent("lateral, creative pattern recognition while checking every clue")
     ]);
     const logic = parseModelJson(logicRaw);
     const lateral = parseModelJson(lateralRaw);
@@ -705,7 +720,7 @@ app.post("/api/mystery/resolve", async (req, res) => {
 
     let judged;
     try {
-      const judgeRaw = await chatCompletion(PROMPTS.mysteryJudge({ answer: submissions, canonical: m.answer, accepted: m.acceptedAnswers, mystery: m.mystery }), 0.1, 360, { json: true, timeoutMs: 30000 });
+      const judgeRaw = await chatCompletion(PROMPTS.mysteryJudge({ answer: submissions, canonical: m.answer, accepted: m.acceptedAnswers, mystery: m.mystery }), 0.1, 900, { json: true, timeoutMs: 45000 });
       judged = parseModelJson(judgeRaw);
     } catch {
       const normalize = v => String(v).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
