@@ -286,3 +286,9 @@ pre.result, .pill{
 .auction-pending{font-size:.88rem;padding:9px 11px;border-radius:9px;background:rgba(255,193,7,.10);border:1px solid rgba(255,193,7,.22);margin:8px 0 12px}
 .auction-team-card{position:relative}
 .auction-team-card strong:after{content:""}
+
+/* Open-ended auction controls */
+.auction-status{font-size:1.05rem;font-weight:800;margin:12px 0;padding:12px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12)}
+.auction-status.waiting{background:rgba(255,193,7,.10);border-color:rgba(255,193,7,.25)}
+.auction-actions{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}.auction-actions .btn{flex:1 1 190px}.auction-skip-btn{opacity:.9}.auction-closed{margin:10px 0;padding:10px;border-radius:9px;font-weight:800;background:rgba(255,255,255,.08)}
+@media(max-width:600px){.auction-actions{flex-direction:column}.auction-actions .btn{width:100%}}
