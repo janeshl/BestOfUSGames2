@@ -1107,23 +1107,35 @@ app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${POR
 /* ========================
    AI Cricket Auction Arena
 ======================== */
-const AUCTION_POOL_ORDER = ["Batsmen", "Bowlers", "Wicket Keepers"];
+const AUCTION_POOL_ORDER = ["Batsmen", "Bowlers", "All Rounders", "Wicket Keepers"];
+const AUCTION_POOL_COUNTS = {"Batsmen":6,"Bowlers":6,"All Rounders":5,"Wicket Keepers":3};
+const AUCTION_DURATION_MS = 10000;
+const AUCTION_MAX_SQUAD = 6;
+const AUCTION_MIN_SQUAD = 5;
+const AUCTION_REQUIRED_ROLES = ["Batsmen","Bowlers","Wicket Keepers"];
 const auctionSessions = new Map();
 const auctionId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 10);
 
 function auctionFallbackPlayers() {
-  // Fallback is only used when the model/API is unavailable.
+  // Exactly 20 players: 6 batsmen, 6 bowlers, 5 all-rounders, 3 wicket keepers.
   return [
     {name:"Suryakumar Yadav",pool:"Batsmen",base:8,rating:92,tag:"All-Format Aggressor"},
     {name:"Ruturaj Gaikwad",pool:"Batsmen",base:7,rating:88,tag:"Aggressive Strokeplayer"},
     {name:"Rinku Singh",pool:"Batsmen",base:6,rating:89,tag:"Finisher"},
     {name:"Travis Head",pool:"Batsmen",base:9,rating:91,tag:"Power-Hitter"},
     {name:"Shubman Gill",pool:"Batsmen",base:8,rating:90,tag:"Aggressive Strokeplayer"},
+    {name:"Yashasvi Jaiswal",pool:"Batsmen",base:7.5,rating:90,tag:"Power-Hitter"},
     {name:"Jasprit Bumrah",pool:"Bowlers",base:10,rating:96,tag:"Fast"},
     {name:"Mohammed Shami",pool:"Bowlers",base:8,rating:90,tag:"Fast"},
     {name:"Kuldeep Yadav",pool:"Bowlers",base:7,rating:89,tag:"Spinner"},
     {name:"Trent Boult",pool:"Bowlers",base:8,rating:91,tag:"Swing Bowler"},
-    {name:"Harshal Patel",pool:"Bowlers",base:6,rating:85,tag:"Medium Fast"},
+    {name:"Rashid Khan",pool:"Bowlers",base:9,rating:94,tag:"Spinner"},
+    {name:"Arshdeep Singh",pool:"Bowlers",base:6.5,rating:87,tag:"Swing Bowler"},
+    {name:"Hardik Pandya",pool:"All Rounders",base:9,rating:91,tag:"Power All-Rounder"},
+    {name:"Ravindra Jadeja",pool:"All Rounders",base:9,rating:93,tag:"Spin All-Rounder"},
+    {name:"Andre Russell",pool:"All Rounders",base:8,rating:90,tag:"Power All-Rounder"},
+    {name:"Axar Patel",pool:"All Rounders",base:7,rating:88,tag:"Spin All-Rounder"},
+    {name:"Liam Livingstone",pool:"All Rounders",base:7.5,rating:89,tag:"Power All-Rounder"},
     {name:"Sanju Samson",pool:"Wicket Keepers",base:8,rating:90,tag:"Aggressive Keeper"},
     {name:"Ishan Kishan",pool:"Wicket Keepers",base:7,rating:88,tag:"Power-Hitting Keeper"},
     {name:"Rishabh Pant",pool:"Wicket Keepers",base:9,rating:92,tag:"Finisher Keeper"}
@@ -1131,57 +1143,94 @@ function auctionFallbackPlayers() {
 }
 
 const auctionPlayerPoolsPrompt = () => [
-  { role: "system", content: `You are creating a fresh IPL-style cricket auction player list using REAL, well-known professional cricketers. Select a different mix on each request where possible. Return STRICT JSON ONLY: {"players":[...]}. Exactly 13 UNIQUE real cricketers: exactly 5 in pool "Batsmen", exactly 5 in "Bowlers", exactly 3 in "Wicket Keepers". Each object: {"name":"real full name","pool":"Batsmen|Bowlers|Wicket Keepers","base":number,"rating":number,"tag":"string"}. Base price must be a realistic game value between 2 and 10 in 0.5 increments. Rating must be 78-97. Batsmen tags must be one of: Aggressive Strokeplayer, Power-Hitter, Finisher, All-Format Aggressor. Bowlers tags must be one of: Swing Bowler, Spinner, Medium Fast, Fast. Wicket keepers may use: Power-Hitting Keeper, Reliable Keeper, Aggressive Keeper, Finisher Keeper. Prefer active or recent internationally recognized cricketers and do not duplicate a person across pools. Do not invent fictional names. No markdown.` },
-  { role: "user", content: "Create a fresh balanced auction pool now. JSON only." }
+  { role: "system", content: `You are creating a fresh IPL-style cricket auction player list using REAL, well-known professional cricketers. Return STRICT JSON ONLY: {"players":[...]}. Exactly 20 UNIQUE real cricketers, in this exact distribution: 6 "Batsmen", 6 "Bowlers", 5 "All Rounders", 3 "Wicket Keepers". Each object: {"name":"real full name","pool":"Batsmen|Bowlers|All Rounders|Wicket Keepers","base":number,"rating":number,"tag":"string"}. Base price must be between 2 and 10 in 0.5 increments. Rating must be 78-97. Use role-appropriate tags. Prefer active or recent internationally recognized cricketers and never duplicate a person. Do not invent fictional names. No markdown.` },
+  { role: "user", content: "Create a fresh balanced 20-player auction pool now. JSON only." }
 ];
 
 async function generateAuctionPlayers(){
   try {
-    const raw = await chatCompletion(auctionPlayerPoolsPrompt(), 0.8, 1400, {json:true, timeoutMs:30000});
+    const raw = await chatCompletion(auctionPlayerPoolsPrompt(), 0.8, 2200, {json:true, timeoutMs:30000});
     const parsed = parseModelJson(raw);
     const players = Array.isArray(parsed?.players) ? parsed.players : [];
-    const counts = {"Batsmen":0,"Bowlers":0,"Wicket Keepers":0};
+    const counts = {...AUCTION_POOL_COUNTS};
     const seen = new Set();
     const cleaned = [];
     for (const x of players) {
       const name = String(x?.name||"").trim();
       const pool = String(x?.pool||"").trim();
-      if (!name || !(pool in counts) || seen.has(name.toLowerCase()) || counts[pool] >= (pool==="Wicket Keepers"?3:5)) continue;
-      seen.add(name.toLowerCase()); counts[pool]++;
+      if (!name || !(pool in counts) || seen.has(name.toLowerCase()) || counts[pool] <= 0) continue;
+      seen.add(name.toLowerCase());
+      counts[pool]--;
       const baseRaw = Number(x.base);
       const base = Number.isFinite(baseRaw) ? Math.min(10,Math.max(2,Math.round(baseRaw*2)/2)) : 5;
       const rating = Math.min(97,Math.max(78,Math.round(Number(x.rating)||85)));
-      const tag = String(x.tag||"").trim() || (pool==="Batsmen"?"Aggressive Strokeplayer":pool==="Bowlers"?"Fast":"Reliable Keeper");
-      cleaned.push({id:`${pool}-${cleaned.length+1}`,name,pool,base,rating,tag});
+      const defaults = {"Batsmen":"Aggressive Strokeplayer","Bowlers":"Fast","All Rounders":"Balanced All-Rounder","Wicket Keepers":"Reliable Keeper"};
+      const tag = String(x.tag||"").trim() || defaults[pool];
+      cleaned.push({id:`${pool.replace(/\s+/g,'-')}-${cleaned.length+1}`,name,pool,base,rating,tag});
     }
-    if (counts.Batsmen===5 && counts.Bowlers===5 && counts["Wicket Keepers"]===3) return cleaned;
+    if (Object.values(counts).every(v=>v===0) && cleaned.length===20) {
+      const ordered=[];
+      for (const pool of AUCTION_POOL_ORDER) ordered.push(...cleaned.filter(p=>p.pool===pool));
+      return ordered;
+    }
   } catch (e) { console.error("Auction AI pool generation failed:", e.message); }
   return auctionFallbackPlayers().map((x,i)=>({...x,id:`fallback-${i+1}`}));
 }
 
 function publicAuction(s){
   const p=s.players[s.index];
-  return {ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,roundEndsAt:s.roundEndsAt,auctionClosed:!!s.auctionClosed,teams:s.teams,logs:s.logs.slice(-10),currentBid:s.highest.amount,currentBidder:s.highest.bidder,done:s.index>=s.players.length,poolName:p?.pool||null};
+  return {
+    ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,
+    roundEndsAt:s.roundEndsAt,auctionClosed:!!s.auctionClosed,
+    teams:s.teams,logs:s.logs.slice(-12),currentBid:s.highest.amount,
+    currentBidder:s.highest.bidder,done:s.index>=s.players.length,poolName:p?.pool||null,
+    poolCounts:AUCTION_POOL_COUNTS,auctionDurationSeconds:AUCTION_DURATION_MS/1000,
+    rules:{minSquad:AUCTION_MIN_SQUAD,maxSquad:AUCTION_MAX_SQUAD,requiredRoles:AUCTION_REQUIRED_ROLES}
+  };
+}
+
+function teamRoleCounts(team){
+  return AUCTION_POOL_ORDER.reduce((acc,role)=>{acc[role]=team.squad.filter(x=>x.pool===role).length;return acc;},{});
+}
+function teamNeeds(team,p){
+  const roles=teamRoleCounts(team);
+  if (team.squad.length>=AUCTION_MAX_SQUAD) return false;
+  if (p.pool==="Wicket Keepers" && roles["Wicket Keepers"]===0) return true;
+  if (p.pool==="Batsmen" && roles.Batsmen===0) return true;
+  if (p.pool==="Bowlers" && roles.Bowlers===0) return true;
+  // Before reaching five players, favour missing core roles and then squad variety.
+  if (team.squad.length<AUCTION_MIN_SQUAD && roles[p.pool]===0) return true;
+  return roles[p.pool]===0;
 }
 function aiMax(team,p){
+  if(team.squad.length>=AUCTION_MAX_SQUAD)return 0;
+  const need=teamNeeds(team,p)?1.18:1;
   const roleCount=team.squad.filter(x=>x.pool===p.pool).length;
-  const need=roleCount===0?1.12:1;
-  const style=team.strategy==='aggressive'?1.12:1.02;
-  return Math.min(team.purse, Math.round((p.base+(p.rating-75)*0.22)*need*style*2)/2);
+  const scarcity=(roleCount===0?1.05:1);
+  const minBuyPressure=team.squad.length<AUCTION_MIN_SQUAD?1.06:1;
+  const style=team.strategy==='aggressive'?1.12:team.strategy==='balanced'?1.05:1.0;
+  const maxSpend=Math.round((p.base+(p.rating-75)*0.22)*need*scarcity*minBuyPressure*style*2)/2;
+  // AI keeps enough purse for minimum-price purchases needed to reach 5 players.
+  const afterThis=Math.max(0,AUCTION_MIN_SQUAD-(team.squad.length+1));
+  const reserve=afterThis*2;
+  return Math.min(Math.max(0,team.purse-reserve), maxSpend);
 }
 function runAgents(s){
-  const p=s.players[s.index]; if(!p || Date.now()>=s.roundEndsAt)return;
+  const p=s.players[s.index]; if(!p || Date.now()>=s.roundEndsAt || s.auctionClosed)return;
   for(const key of ['agent1','agent2']){
-    const t=s.teams[key]; if(s.highest.bidder===key||t.purse<0.5)continue;
+    const t=s.teams[key];
+    if(t.squad.length>=AUCTION_MAX_SQUAD || s.highest.bidder===key || t.purse<0.5)continue;
     const max=aiMax(t,p), next=Math.round((s.highest.amount+0.5)*2)/2;
-    if(next<=max && Math.random()<(t.strategy==='aggressive'?0.78:0.62)){
+    const mustCover = teamNeeds(t,p) && t.squad.length<AUCTION_MIN_SQUAD;
+    const chance=t.strategy==='aggressive'?0.82:0.68;
+    if(next<=max && (mustCover || Math.random()<chance)){
       s.highest={bidder:key,amount:next};
       s.logs.push(`${t.name} bids ₹${next} Cr for ${p.name}`);
     }
   }
 }
 function settleCurrentPlayer(s){
-  if(s.auctionClosed) return;
+  if(s.auctionClosed)return;
   const p=s.players[s.index]; if(!p)return;
   if(s.highest.bidder){
     const t=s.teams[s.highest.bidder];
@@ -1193,12 +1242,57 @@ function settleCurrentPlayer(s){
   s.logs.push('Auctioneer: The bidding is closed. Please proceed to the next player.');
 }
 
+function evaluateTeam(t){
+  const roles=teamRoleCounts(t);
+  const squadSize=t.squad.length;
+  const avgRating=squadSize?t.squad.reduce((a,p)=>a+p.rating,0)/squadSize:0;
+  const roleTypes=AUCTION_POOL_ORDER.filter(r=>roles[r]>0).length;
+  const coreRoles=AUCTION_REQUIRED_ROLES.filter(r=>roles[r]>0).length;
+  const spent=100-t.purse;
+  const avgPrice=squadSize?spent/squadSize:0;
+
+  // Final assessment is deliberately multi-factor and totals 100 points.
+  const ratingScore=Math.min(25,(avgRating/100)*25);                         // 25
+  const varietyScore=(roleTypes/4)*20;                                      // 20
+  const roleAvailabilityScore=(coreRoles/3)*20;                             // 20
+  const squadCompleteness=squadSize>=AUCTION_MIN_SQUAD?10:0;                // 10
+
+  // Purse-spending tactic: reward strong ratings at sensible prices and
+  // preserve enough purse to show discipline rather than simply overspending.
+  const valueRatio=squadSize?Math.min(1,avgRating/Math.max(1,avgPrice*12)):0;
+  const purseDiscipline=squadSize?Math.max(0,1-Math.abs(t.purse-40)/60):0;
+  const spendingScore=Math.round((valueRatio*0.65+purseDiscipline*0.35)*15); // 15
+
+  // Strategy/fit: reward squads that use different player profiles and roles
+  // rather than buying six players with the same auction profile.
+  const uniqueTags=squadSize?new Set(t.squad.map(p=>p.tag)).size:0;
+  const strategyFit=Math.min(10, (roleTypes/4)*5 + Math.min(1,uniqueTags/4)*5); // 10
+
+  const valid=squadSize>=AUCTION_MIN_SQUAD && squadSize<=AUCTION_MAX_SQUAD && coreRoles===3;
+  const score=Math.max(0,Math.min(100,Math.round(ratingScore+varietyScore+roleAvailabilityScore+squadCompleteness+spendingScore+strategyFit)));
+  const reasons=[];
+  if(coreRoles<3)reasons.push(`missing ${AUCTION_REQUIRED_ROLES.filter(r=>!roles[r]).join(', ')}`);
+  if(squadSize<AUCTION_MIN_SQUAD)reasons.push(`only ${squadSize} buys (minimum ${AUCTION_MIN_SQUAD})`);
+  if(squadSize>AUCTION_MAX_SQUAD)reasons.push(`more than ${AUCTION_MAX_SQUAD} buys`);
+  return {
+    valid,score,avgRating:Math.round(avgRating*10)/10,
+    roleCounts:roles,roleTypes,spent:Math.round(spent*10)/10,
+    remaining:Math.round(t.purse*10)/10,avgPrice:Math.round(avgPrice*10)/10,
+    breakdown:{rating:Math.round(ratingScore),variety:Math.round(varietyScore),roleAvailability:Math.round(roleAvailabilityScore),squadCompleteness,spendingTactic:spendingScore,strategyFit},
+    reasons
+  };
+}
+
 app.post('/api/auction/start', async (req,res)=>{
   try {
     const players = await generateAuctionPlayers();
     const id=auctionId();
-    const teams={player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}};
-    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,lastAuctioneerCall:'',roundEndsAt:Date.now()+10000,logs:[`Pool: ${players[0].pool} | Auction starts: ${players[0].name} at ₹${players[0].base} Cr`]};
+    const teams={
+      player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},
+      agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},
+      agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}
+    };
+    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,lastAuctioneerCall:'',roundEndsAt:Date.now()+AUCTION_DURATION_MS,logs:[`Pool: ${players[0].pool} | Auction starts: ${players[0].name} at ₹${players[0].base} Cr`]};
     auctionSessions.set(id,s); res.json(publicAuction(s));
   } catch(e){res.status(500).json({ok:false,error:e.message||'Unable to start auction'});}
 });
@@ -1206,16 +1300,18 @@ app.post('/api/auction/bid',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId);
   if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'});
   if(s.auctionClosed || Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'This player auction has closed.'});
+  const team=s.teams.player;
+  if(team.squad.length>=AUCTION_MAX_SQUAD)return res.status(400).json({ok:false,error:`Your Team already has the maximum ${AUCTION_MAX_SQUAD} players.`});
   const p=s.players[s.index], next=Math.round((s.highest.amount+0.5)*2)/2;
-  if(s.teams.player.purse<next)return res.status(400).json({ok:false,error:'Insufficient purse'});
-  s.highest={bidder:'player',amount:next}; s.logs.push(`${s.teams.player.name} bids ₹${next} Cr for ${p.name}`); runAgents(s);
+  if(team.purse<next)return res.status(400).json({ok:false,error:'Insufficient purse'});
+  s.highest={bidder:'player',amount:next}; s.logs.push(`${team.name} bids ₹${next} Cr for ${p.name}`); runAgents(s);
   res.json(publicAuction(s));
 });
 app.post('/api/auction/tick',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
   if(s.index<s.players.length && !s.auctionClosed){
     const remaining=Math.ceil((s.roundEndsAt-Date.now())/1000);
-    if(remaining<=0) settleCurrentPlayer(s);
+    if(remaining<=0)settleCurrentPlayer(s);
     else {
       runAgents(s);
       if(remaining<=3 && s.lastAuctioneerCall!==String(remaining)){
@@ -1231,14 +1327,24 @@ app.post('/api/auction/next',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
   if(!s.auctionClosed)return res.status(400).json({ok:false,error:'Current auction is still live'});
   s.index++;
-  if(s.index<s.players.length){ const n=s.players[s.index]; s.highest={bidder:null,amount:n.base}; s.auctionClosed=false; s.lastAuctioneerCall=''; s.roundEndsAt=Date.now()+10000; s.logs.push(`Auctioneer: Next player, ${n.name}, enters from the ${n.pool} pool at ₹${n.base} Cr.`); }
+  if(s.index<s.players.length){
+    const n=s.players[s.index];
+    s.highest={bidder:null,amount:n.base}; s.auctionClosed=false; s.lastAuctioneerCall=''; s.roundEndsAt=Date.now()+AUCTION_DURATION_MS;
+    s.logs.push(`Auctioneer: Next player, ${n.name}, enters from the ${n.pool} pool at ₹${n.base} Cr.`);
+  }
   res.json(publicAuction(s));
 });
 app.post('/api/auction/results',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
-  if(s.index<s.players.length)return res.status(400).json({ok:false,error:'Finish all player auctions first.'});
-  const score=t=>{const avg=t.squad.length?t.squad.reduce((a,p)=>a+p.rating,0)/t.squad.length:0;const roles=new Set(t.squad.map(p=>p.pool)).size;const balance=roles/3*25;const strength=avg/100*55;const value=t.squad.length?Math.min(20,(t.purse/100*10)+10):0;return Math.round(strength+balance+value);};
-  const ranked=Object.entries(s.teams).map(([id,t])=>({id,name:t.name,score:score(t),spent:100-t.purse,remaining:t.purse,squad:t.squad})).sort((a,b)=>b.score-a.score);
-  res.json({ok:true,ranked,winner:ranked[0]});
+  if(s.index<s.players.length)return res.status(400).json({ok:false,error:'Finish all 20 player auctions first.'});
+  const ranked=Object.entries(s.teams).map(([id,t])=>{
+    const ev=evaluateTeam(t);
+    return {id,name:t.name,score:ev.valid?ev.score:0,disqualified:!ev.valid,spent:ev.spent,remaining:ev.remaining,squad:t.squad,analysis:ev};
+  }).sort((a,b)=>{
+    if(a.disqualified!==b.disqualified)return a.disqualified?1:-1;
+    return b.score-a.score;
+  });
+  const winner=ranked.find(x=>!x.disqualified)||ranked[0];
+  res.json({ok:true,ranked,winner,criteria:{rating:25,variety:20,roleAvailability:20,squadCompleteness:10,squadSizeEfficiency:5,spendingEfficiency:10,purseTactic:5,minimumBuys:5,requiredRoles:AUCTION_REQUIRED_ROLES}});
 });
 
