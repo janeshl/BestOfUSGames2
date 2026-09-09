@@ -30,29 +30,13 @@ const makeId = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10);
    Prompt templates
 ------------------------- */
 const PROMPTS = {
-  // Game 1: Predict the Future
-  fortune: ({ name, birthMonth, favoritePlace }) => [
-    {
-      role: "system",
-      content:
-        "You are a funny fortune teller. Create funny, positive unique predictions in 2-3 sentences. Use the inputs naturally and a additional any funny obects. Keep it light; no health, death, or lottery claims.",
-    },
-    {
-      role: "user",
-      content: `Make a humorous future prediction for:
-Name: ${name}
-Birth month: ${birthMonth}
-Favorite place: ${favoritePlace}`,
-    },
-  ],
-
-  // Game 2: 5-Round Quiz (HARD)
+  // Game 1: 5-Round Quiz (HARD)
   quiz: (topic, bannedQuestions = []) => [
     { role: "system", content: `You are an expert quiz generator. Create EXACTLY 5 difficult multiple-choice questions STRICTLY and DIRECTLY related to the exact topic provided. Do not broaden, reinterpret, or substitute the topic. Every question must test knowledge specifically about that topic. Exactly 4 options per question, exactly one correct answer, answerIndex 1-4. Avoid these previous questions: ${bannedQuestions.join(" | ") || "(none)"}. Return STRICT JSON ONLY: {"questions":[{"question":"string","options":["string","string","string","string"],"answerIndex":1,"explanation":"string"}]}. No markdown or extra text.` },
     { role: "user", content: `Exact topic: "${topic}". Generate questions ONLY about this exact topic. JSON only.` },
   ],
 
-  // Game 3: Guess the Character (hard)
+  // Game 2: Guess the Character (hard)
   characterCandidates: (topic, excludeList = []) => [
     { role: "system", content: `You are curating a HARD Guess the Character game. Select EXACTLY 8 distinct people or fictional characters directly and unmistakably related to the exact topic. Prefer medium-hard or hard choices: important but not the most obvious first answer. Avoid random celebrities, loosely related names, generic figures, and repeated characters. Preserve the exact topic scope. Never repeat any name or alter ego from this exclusion list: ${excludeList.join(", ") || "(none)"}. Return STRICT JSON ONLY: {"candidates":["name1","name2","name3","name4","name5","name6","name7","name8"]}. No extra text.` },
     { role: "user", content: `Exact topic: "${topic}". Select hard, non-repetitive candidates ONLY directly related to this exact topic. JSON only.` },
@@ -303,21 +287,7 @@ async function chatCompletion(messages, temperature = 0.7, max_tokens = 256, opt
 }
 
 /* ========================
-   Game 1: Predict the Future
-======================== */
-app.post("/api/predict-future", async (req, res) => {
-  try {
-    const { name, birthMonth, favoritePlace } = req.body ?? {};
-    const messages = PROMPTS.fortune({ name, birthMonth, favoritePlace });
-    const content = await chatCompletion(messages, 0.9, 180);
-    res.json({ ok: true, content });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-/* ========================
-   Game 2: 5-Round Quiz (hard, no-repeat per topic)
+   Game 1: 5-Round Quiz (hard, no-repeat per topic)
 ======================== */
 app.post("/api/quiz/start", async (req, res) => {
   try {
@@ -1124,3 +1094,32 @@ app.post("/api/glam/score", async (req, res) => {
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${PORT}`));
+
+/* ------------------------
+   AI Cricket Auction Arena
+------------------------- */
+const AUCTION_PLAYERS = [
+ {id:'b1',name:'Arjun Blaze',pool:'Batsmen',base:8,rating:92,tag:'Power-Hitter'},
+ {id:'b2',name:'Vikram Rao',pool:'Batsmen',base:6,rating:88,tag:'Aggressive Strokeplayer'},
+ {id:'b3',name:'Karan Mehta',pool:'Batsmen',base:5,rating:85,tag:'Finisher'},
+ {id:'b4',name:'Dev Kapoor',pool:'Batsmen',base:7,rating:90,tag:'All-Format Aggressor'},
+ {id:'b5',name:'Rohan Storm',pool:'Batsmen',base:4,rating:82,tag:'Aggressive Strokeplayer'},
+ {id:'bo1',name:'Armaan Khan',pool:'Bowlers',base:8,rating:91,tag:'Fast'},
+ {id:'bo2',name:'Ravi Patel',pool:'Bowlers',base:6,rating:87,tag:'Swing Bowler'},
+ {id:'bo3',name:'Aditya Sharma',pool:'Bowlers',base:7,rating:89,tag:'Spinner'},
+ {id:'bo4',name:'Sameer Ali',pool:'Bowlers',base:5,rating:84,tag:'Medium Fast'},
+ {id:'bo5',name:'Kabir Singh',pool:'Bowlers',base:4,rating:81,tag:'Fast'},
+ {id:'w1',name:'Aryan Joshi',pool:'Wicket Keepers',base:7,rating:90,tag:'Power-Hitting Keeper'},
+ {id:'w2',name:'Nikhil Das',pool:'Wicket Keepers',base:5,rating:86,tag:'Reliable Keeper'},
+ {id:'w3',name:'Rahul Verma',pool:'Wicket Keepers',base:6,rating:88,tag:'Aggressive Keeper'}
+];
+const auctionSessions = new Map();
+const auctionId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 10);
+function publicAuction(s){ const p=s.players[s.index]; return {ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,roundEndsAt:s.roundEndsAt,teams:s.teams,logs:s.logs.slice(-12),done:s.index>=s.players.length}; }
+function aiMax(team,p){ const roleCount=team.squad.filter(x=>x.pool===p.pool).length; const need=roleCount===0?1.12:1; const style=team.strategy==='aggressive'?1.12:1.02; return Math.min(team.purse, Math.round((p.base+(p.rating-75)*0.22)*need*style*2)/2); }
+function runAgents(s){ const p=s.players[s.index]; if(!p)return; for(const key of ['agent1','agent2']){ const t=s.teams[key]; if(s.highest.bidder===key||t.purse<0.5)continue; const max=aiMax(t,p); const next=Math.round((s.highest.amount+0.5)*2)/2; if(next<=max && Math.random()< (t.strategy==='aggressive'?0.78:0.62)){ s.highest={bidder:key,amount:next}; s.logs.push(`${t.name} bids ₹${next} Cr for ${p.name}`); } } }
+app.post('/api/auction/start',(req,res)=>{ const id=auctionId(); const teams={player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}}; const s={id,players:AUCTION_PLAYERS,index:0,teams,highest:{bidder:null,amount:AUCTION_PLAYERS[0].base},roundEndsAt:Date.now()+30000,logs:[`Auction starts: ${AUCTION_PLAYERS[0].name} at ₹${AUCTION_PLAYERS[0].base} Cr`]}; auctionSessions.set(id,s); res.json(publicAuction(s)); });
+app.post('/api/auction/bid',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'}); if(Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'Time expired. Close this player.'}); const p=s.players[s.index], next=Math.round((s.highest.amount+0.5)*2)/2; if(s.teams.player.purse<next)return res.status(400).json({ok:false,error:'Insufficient purse'}); s.highest={bidder:'player',amount:next}; s.logs.push(`${s.teams.player.name} bids ₹${next} Cr for ${p.name}`); runAgents(s); res.json(publicAuction(s)); });
+app.post('/api/auction/tick',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'}); if(Date.now()<s.roundEndsAt)runAgents(s); res.json(publicAuction(s)); });
+app.post('/api/auction/close',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'}); const p=s.players[s.index]; if(!p)return res.json(publicAuction(s)); if(s.highest.bidder){const t=s.teams[s.highest.bidder]; t.purse=Math.round((t.purse-s.highest.amount)*100)/100; t.squad.push({...p,price:s.highest.amount}); s.logs.push(`SOLD! ${p.name} → ${t.name} for ₹${s.highest.amount} Cr`);}else s.logs.push(`UNSOLD: ${p.name}`); s.index++; if(s.index<s.players.length){const n=s.players[s.index];s.highest={bidder:null,amount:n.base};s.roundEndsAt=Date.now()+30000;s.logs.push(`Next: ${n.name} enters at ₹${n.base} Cr`);} res.json(publicAuction(s)); });
+app.post('/api/auction/results',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'}); const score=t=>{const avg=t.squad.length?t.squad.reduce((a,p)=>a+p.rating,0)/t.squad.length:0;const roles=new Set(t.squad.map(p=>p.pool)).size;const balance=roles/3*25;const strength=avg/100*55;const value=t.squad.length?Math.min(20,(t.purse/100*10)+10):0;return Math.round(strength+balance+value);}; const ranked=Object.entries(s.teams).map(([id,t])=>({id,name:t.name,score:score(t),spent:100-t.purse,remaining:t.purse,squad:t.squad})).sort((a,b)=>b.score-a.score); res.json({ok:true,ranked,winner:ranked[0]}); });
