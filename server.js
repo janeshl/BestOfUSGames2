@@ -660,7 +660,7 @@ app.post("/api/character/final-guess", async (req,res)=>{
 ======================== */
 app.post("/api/mystery/start", async (_req, res) => {
   try {
-    const raw = await chatCompletion(PROMPTS.mysterySet(), 0.8, 1800, { json: true, timeoutMs: 45000 });
+    const raw = await chatCompletion(PROMPTS.mysterySet(), 0.55, 5000, { json: true, timeoutMs: 60000 });
     const parsed = parseModelJson(raw);
     const mysteries = Array.isArray(parsed.mysteries) ? parsed.mysteries : [];
     const valid = mysteries.filter(m =>
