@@ -1515,9 +1515,12 @@ function evaluateTeam(t){
 
 app.post('/api/auction/start', async (req,res)=>{
   try{
+    const teamName=String(req.body?.teamName||'').trim();
+    if(teamName.length<2)return res.status(400).json({ok:false,error:'Please enter a team name with at least 2 characters.'});
+    if(teamName.length>30)return res.status(400).json({ok:false,error:'Team name must be 30 characters or fewer.'});
     const players=await generateAuctionPlayers(),id=auctionId();
     const teams={
-      player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},
+      player:{name:teamName,purse:100,squad:[],strategy:'player'},
       agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},
       agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}
     };
