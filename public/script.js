@@ -204,7 +204,7 @@ function html(e,m){if(e)e.innerHTML=m}
       turnForm.style.display='flex'; finalWrap.style.display='none'; html(playerChat,''); html(agentChat,''); html(result,'');
       push(playerChat,'Game Master','Battle started. Your answers stay private. Ask your first question.');
       push(agentChat,'AI Detective','Investigation started. I will ask my own private question after your turn.');
-      setText(rounds,'Rounds left: 10'); updateAgent({status:'Ready to investigate',confidence:0});
+      setText(rounds,'Rounds left: 5'); updateAgent({status:'Ready to investigate',confidence:0});
     }catch(err){
       html(playerChat,'<div class="pill">❌ '+String(err.message||'Unable to start the battle.')+'</div>');
       html(agentChat,'<div class="pill">Waiting for the battle to start...</div>');
@@ -226,7 +226,7 @@ function html(e,m){if(e)e.innerHTML=m}
       if(json.agent?.question) push(agentChat,'AI Detective','Question: '+json.agent.question+' 🔒');
       if(json.done){finish(json);return;}
       if(typeof json.roundsLeft==='number') setText(rounds,'Rounds left: '+json.roundsLeft);
-      if(json.finalRoundReady){ finalReady=true; turnForm.style.display='none'; finalWrap.style.display='block'; push(playerChat,'Game Master','Round 10 complete. Submit your final guess.'); push(agentChat,'AI Detective','Preparing my final answer...'); }
+      if(json.finalRoundReady){ finalReady=true; turnForm.style.display='none'; finalWrap.style.display='block'; push(playerChat,'Game Master','Round 5 complete. The final public hint is available. Submit your final guess.'); push(agentChat,'AI Detective','I am using my private evidence and the final public hint to prepare my final answer...'); }
     }catch{push(playerChat,'Game Master','Network error. Please try again.');}
   });
 
