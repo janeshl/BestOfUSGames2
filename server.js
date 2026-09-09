@@ -23,6 +23,7 @@ app.use("/api/", rateLimit({ windowMs: 60 * 1000, max: 30 }));
 const sessions = new Map();
 const recentByTopic = new Map();        // Character game: avoid repeats per topic (last 5)
 const recentQuizByTopic = new Map();    // Quiz game: avoid repeating questions per topic (keep last 50 Qs)
+const MAX_CHARACTER_ROUNDS = 5;
 const makeId = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10);
 
 /* ------------------------
@@ -58,7 +59,7 @@ Favorite place: ${favoritePlace}`,
   ],
 
   characterTurn: ({ name, qa, round, text }) => [
-    { role: "system", content: `You are running a Guess the Character game. Secret character: "${name}". Answer naturally and briefly without revealing the name. Detect direct guesses. Return STRICT JSON: {"answer":"string","isGuess":true,"guessedName":"string","hints":["string"]}. If round is 8 or higher, hints MUST contain at least one helpful clue that does not mention the secret name. Hints become stronger in rounds 9 and 10. No markdown or extra text.` },
+    { role: "system", content: `You are running a hard 5-round Guess the Character game. Secret character: "${name}". Answer naturally and briefly without revealing the name. Detect direct guesses. Return STRICT JSON: {"answer":"string","isGuess":true,"guessedName":"string","hints":[]}. Never include a hint in your answer. A separate public hint is generated only after both sides finish round 5. No markdown or extra text.` },
     { role: "user", content: `Previous Q&A:
 ${qa}
 Current Round: ${round}
@@ -66,13 +67,13 @@ User message: ${text}` },
   ],
 
   characterHint: ({ name, topic, round }) => [
-    { role: "system", content: `Generate one helpful clue for Guess the Character. Secret: "${name}". Topic: "${topic}". Round: ${round}. Do not mention the name. Round 8 broad clue, round 9 stronger, round 10 strongest without naming it. Max 25 words. Return STRICT JSON ONLY: {"hint":"string"}.` },
+    { role: "system", content: `Generate exactly one strong but fair FINAL-ROUND public clue for a hard Guess the Character game. Secret: "${name}". Topic: "${topic}". Round: ${round}. Do not mention the secret name or any exact alias. The clue should meaningfully narrow the possibilities without making the answer trivial. Max 30 words. Return STRICT JSON ONLY: {"hint":"string"}.` },
     { role: "user", content: "Generate the clue. JSON only." },
   ],
 
   // Agentic detective: private reasoning, candidate ranking and its own question. The secret name is never sent here.
   characterAgent: ({ topic, history, clues, round, previousGuesses }) => [
-    { role: "system", content: `You are an autonomous expert detective competing in a hard Guess the Character game. You DO NOT know the secret name. You may use ONLY your own private Q&A history, public clues, the exact topic, and your previous guesses. Never use the player's private questions or answers. Analyze evidence deeply: eliminate candidates that contradict evidence, maintain a ranked shortlist, and ask the single most information-rich next question. Return STRICT JSON ONLY: {"analysis":"private concise reasoning","topCandidates":[{"name":"string","confidence":0},{"name":"string","confidence":0},{"name":"string","confidence":0}],"confidence":0,"question":"string or null","shouldGuess":false,"guess":null,"status":"short public status"}. Rules: exactly 3 plausible ranked candidates whenever evidence allows; confidence 0-100; never guess randomly; before round 5 normally investigate; early guess only at confidence >=85; rounds 8-9 use clues aggressively; round 10 must provide best guess; do not reveal private analysis or candidate names in status; ask a question that can discriminate between leading candidates. No markdown.` },
+    { role: "system", content: `You are an autonomous expert detective competing in a HARD 5-round Guess the Character game. You DO NOT know the secret name. You may use ONLY your own private Q&A history, public clues, the exact topic, and your previous guesses. Never use the player's private questions or answers. Analyze evidence deeply: track constraints, eliminate candidates that contradict evidence, maintain a ranked shortlist, and ask the single most information-rich next question. Return STRICT JSON ONLY: {"analysis":"private concise reasoning","topCandidates":[{"name":"string","confidence":0},{"name":"string","confidence":0},{"name":"string","confidence":0}],"confidence":0,"question":"string or null","shouldGuess":false,"guess":null,"status":"short public status"}. Rules: exactly 3 plausible ranked candidates whenever evidence allows; confidence 0-100; never guess randomly; rounds 1-2 investigate; rounds 3-4 may make an early guess only at confidence >=85; round 5 should ask one final discriminating question and wait for the public final-round hint; the final answer is submitted separately after round 5. Do not reveal private analysis or candidate names in status; ask a question that can discriminate between leading candidates. No markdown.` },
     { role: "user", content: `Exact topic: ${topic}
 
 YOUR PRIVATE Q&A HISTORY:
@@ -450,7 +451,7 @@ async function judgeCharacterGuess(secretName, guess) {
 
 async function runCharacterAgent(s, round) {
   const history = (s.agent.history || []).map((h, i) => `Round ${i + 1} Agent Question: ${h.q}\nPrivate Game Master Answer: ${h.a}`).join("\n");
-  const clues = (s.clues || []).map((c, i) => `Round ${i + 8} clue: ${c}`).join("\n");
+  const clues = (s.clues || []).map((c) => `Final-round public clue: ${c}`).join("\n");
   const previousGuesses = (s.agent.guesses || []).map((g) => `${g.guess} (${g.correct ? "correct" : "wrong"})`).join(", ");
   try {
     const raw = await chatCompletion(PROMPTS.characterAgent({ topic: s.topic, history, clues, round, previousGuesses }), 0.25, 900, { json: true });
@@ -535,48 +536,92 @@ app.post("/api/character/turn", async (req, res) => {
     const { sessionId, text } = req.body ?? {};
     const s = sessions.get(sessionId);
     if (!s || s.type !== "character") return res.status(400).json({ ok:false, error:"Session not found." });
-    if (s.rounds >= 10) return res.status(400).json({ ok:false, error:"All 10 rounds are complete. Submit your final guess." });
+    if (s.rounds >= MAX_CHARACTER_ROUNDS) return res.status(400).json({ ok:false, error:`All ${MAX_CHARACTER_ROUNDS} rounds are complete. Submit your final guess.` });
+
     const qa = s.history.map((h,i)=>`Q${i+1}: ${h.q}\nA${i+1}: ${h.a}`).join("\n");
     let parsed={answer:"Okay.",isGuess:false,guessedName:"",hints:[]};
-    try { parsed=parseModelJson(await chatCompletion(PROMPTS.characterTurn({name:s.name,qa,round:s.rounds+1,text}),0.3,700,{json:true})); } catch (err) { console.error("Character turn parse failed:", err.message); }
+    try {
+      parsed=parseModelJson(await chatCompletion(
+        PROMPTS.characterTurn({name:s.name,qa,round:s.rounds+1,text}),0.3,700,{json:true}
+      ));
+    } catch (err) {
+      console.error("Character turn parse failed:", err.message);
+    }
+
     s.rounds += 1;
-    s.history.push({q:text||"",a:parsed.answer||""});
     const roundNow=s.rounds;
-    let hintsOut=[];
-    if (roundNow>=8) {
-      const arr=Array.isArray(parsed.hints)?parsed.hints.filter(h=>typeof h==="string"&&h.trim()):[];
-      if(arr.length) hintsOut=[arr[0].trim()];
-      if(!hintsOut.length){ try { const hp=parseModelJson(await chatCompletion(PROMPTS.characterHint({name:s.name,topic:s.topic,round:roundNow}),0.3,350,{json:true})); if(hp?.hint?.trim()) hintsOut=[hp.hint.trim()]; } catch(err){ console.error("Character hint failed:", err.message); } }
-      if(!hintsOut.length) hintsOut=[`This character has a strong and direct connection to the topic: ${s.topic}.`];
-      s.clues.push(hintsOut[0]);
-    }
+    s.history.push({q:text||"",a:parsed.answer||""});
 
-    // Player can win immediately with a correct natural-language guess.
-    if(parsed.isGuess && parsed.guessedName){
+    // Player can win immediately only before the final simultaneous-guess stage.
+    if(parsed.isGuess && parsed.guessedName && roundNow < MAX_CHARACTER_ROUNDS){
       const playerJudge=await judgeCharacterGuess(s.name,parsed.guessedName);
-      if(playerJudge.correct){ sessions.delete(sessionId); return res.json({ok:true,done:true,winner:"player",win:true,name:s.name,answer:parsed.answer,hints:hintsOut,message:`🏆 You beat the AI Detective and solved it in round ${roundNow}!`,agent:{confidence:s.agent.confidence,status:s.agent.status}}); }
+      if(playerJudge.correct){
+        sessions.delete(sessionId);
+        return res.json({
+          ok:true,done:true,winner:"player",win:true,name:s.name,answer:parsed.answer,hints:[],
+          message:`🏆 You beat the AI Detective and solved it in round ${roundNow}!`,
+          agent:{confidence:s.agent.confidence,status:s.agent.status}
+        });
+      }
     }
 
-    // Agent gets its own private turn. It never receives the player's Q/A.
+    // Agent gets its own private turn. It never receives the player's Q/A or answers.
     const decision=await runCharacterAgent(s,roundNow);
-    s.agent.confidence=decision.confidence; s.agent.status=decision.status; s.agent.analysis=decision.analysis; s.agent.topCandidates=decision.topCandidates;
+    s.agent.confidence=decision.confidence;
+    s.agent.status=decision.status;
+    s.agent.analysis=decision.analysis;
+    s.agent.topCandidates=decision.topCandidates;
+
     let agentQuestion = decision.question || null;
-    if (roundNow < 10 && agentQuestion) {
+    if (agentQuestion) {
       let agentPrivateAnswer = "";
       try {
         const agentQa = (s.agent.history || []).map((h,i)=>`Q${i+1}: ${h.q}\nA${i+1}: ${h.a}`).join("\n");
-        const agentParsed = parseModelJson(await chatCompletion(PROMPTS.characterTurn({name:s.name,qa:agentQa,round:roundNow,text:agentQuestion}),0.2,500,{json:true}));
+        const agentParsed = parseModelJson(await chatCompletion(
+          PROMPTS.characterTurn({name:s.name,qa:agentQa,round:roundNow,text:agentQuestion}),0.2,500,{json:true}
+        ));
         agentPrivateAnswer = String(agentParsed.answer || "").trim();
-      } catch {}
+      } catch (err) {
+        console.error("Agent private question failed:", err.message);
+      }
       if (agentPrivateAnswer) s.agent.history.push({q:agentQuestion,a:agentPrivateAnswer});
     }
-    if(roundNow<10 && decision.shouldGuess && decision.guess && !s.agent.guesses.some(g=>g.guess.toLowerCase()===decision.guess.toLowerCase())){
+
+    // The detective may win early in rounds 1-4. Round 5 is reserved for simultaneous final guesses.
+    if(roundNow < MAX_CHARACTER_ROUNDS && decision.shouldGuess && decision.guess && !s.agent.guesses.some(g=>g.guess.toLowerCase()===decision.guess.toLowerCase())){
       const judged=await judgeCharacterGuess(s.name,decision.guess);
       s.agent.guesses.push({round:roundNow,guess:decision.guess,correct:judged.correct});
-      if(judged.correct){ sessions.delete(sessionId); return res.json({ok:true,done:true,winner:"agent",win:false,name:s.name,answer:parsed.answer,hints:hintsOut,message:`🤖 AI Detective solved the mystery in round ${roundNow}!`,agent:{confidence:decision.confidence,status:"Solved the mystery!",guess:decision.guess}}); }
+      if(judged.correct){
+        sessions.delete(sessionId);
+        return res.json({
+          ok:true,done:true,winner:"agent",win:false,name:s.name,answer:parsed.answer,hints:[],
+          message:`🤖 AI Detective solved the mystery in round ${roundNow}!`,
+          agent:{confidence:decision.confidence,status:"Solved the mystery!",guess:decision.guess}
+        });
+      }
     }
 
-    res.json({ok:true,done:false,answer:parsed.answer,hints:hintsOut,round:roundNow,roundsLeft:10-roundNow,finalRoundReady:roundNow>=10,agent:{confidence:s.agent.confidence,status:s.agent.status,question:agentQuestion}});
+    // Only after both the player and agent have completed round 5 do we reveal the public clue.
+    let hintsOut=[];
+    if (roundNow === MAX_CHARACTER_ROUNDS) {
+      try {
+        const hp=parseModelJson(await chatCompletion(
+          PROMPTS.characterHint({name:s.name,topic:s.topic,round:roundNow}),0.3,350,{json:true}
+        ));
+        if(hp?.hint?.trim()) hintsOut=[hp.hint.trim()];
+      } catch(err){
+        console.error("Final character hint failed:", err.message);
+      }
+      if(!hintsOut.length) hintsOut=[`Focus on a distinctive role, achievement, setting, or relationship that strongly connects this character to ${s.topic}.`];
+      s.clues.push(hintsOut[0]);
+    }
+
+    res.json({
+      ok:true,done:false,answer:parsed.answer,hints:hintsOut,round:roundNow,
+      roundsLeft:Math.max(0,MAX_CHARACTER_ROUNDS-roundNow),
+      finalRoundReady:roundNow===MAX_CHARACTER_ROUNDS,
+      agent:{confidence:s.agent.confidence,status:s.agent.status,question:agentQuestion}
+    });
   } catch(e){ res.status(500).json({ok:false,error:e.message}); }
 });
 
@@ -585,17 +630,36 @@ app.post("/api/character/final-guess", async (req,res)=>{
     const {sessionId,playerGuess}=req.body??{};
     const s=sessions.get(sessionId);
     if(!s||s.type!=="character") return res.status(400).json({ok:false,error:"Session not found."});
-    if(s.rounds<10) return res.status(400).json({ok:false,error:"Final guesses unlock after round 10."});
-    const agentDecision=await runCharacterAgent(s,10);
-    const agentGuess=agentDecision.guess || "No valid guess";
-    const [playerResult,agentResult]=await Promise.all([judgeCharacterGuess(s.name,playerGuess),judgeCharacterGuess(s.name,agentGuess)]);
+    if(s.rounds<MAX_CHARACTER_ROUNDS) return res.status(400).json({ok:false,error:`Final guesses unlock after round ${MAX_CHARACTER_ROUNDS}.`});
+
+    // The public final clue is now available to the agent too, but the player still cannot see agent private answers.
+    const agentDecision=await runCharacterAgent(s,MAX_CHARACTER_ROUNDS);
+    const agentGuess=agentDecision.guess || (Array.isArray(agentDecision.topCandidates) && agentDecision.topCandidates[0]?.name) || "No valid guess";
+    const [playerResult,agentResult]=await Promise.all([
+      judgeCharacterGuess(s.name,playerGuess),
+      judgeCharacterGuess(s.name,agentGuess)
+    ]);
+
     let winner="draw";
     if(playerResult.correct&&!agentResult.correct) winner="player";
     else if(!playerResult.correct&&agentResult.correct) winner="agent";
     // both correct and both wrong are draws
-    const message=winner==="player"?"🏆 You beat the AI Detective!":winner==="agent"?"🤖 The AI Detective wins this round.":playerResult.correct&&agentResult.correct?"🤝 Draw! Both you and the AI Detective identified the character correctly.":"🤝 Draw! Neither side identified the character correctly.";
-    const payload={ok:true,done:true,winner,win:winner==="player",name:s.name,message,player:{guess:playerGuess||"",correct:playerResult.correct},agent:{guess:agentGuess,correct:agentResult.correct,confidence:agentDecision.confidence}};
-    sessions.delete(sessionId); res.json(payload);
+
+    const message=winner==="player"
+      ? "🏆 You beat the AI Detective!"
+      : winner==="agent"
+        ? "🤖 The AI Detective wins this battle."
+        : playerResult.correct&&agentResult.correct
+          ? "🤝 Draw! Both you and the AI Detective identified the character correctly."
+          : "🤝 Draw! Neither side identified the character correctly.";
+
+    const payload={
+      ok:true,done:true,winner,win:winner==="player",name:s.name,message,
+      player:{guess:playerGuess||"",correct:playerResult.correct},
+      agent:{guess:agentGuess,correct:agentResult.correct,confidence:agentDecision.confidence}
+    };
+    sessions.delete(sessionId);
+    res.json(payload);
   } catch(e){res.status(500).json({ok:false,error:e.message});}
 });
 
