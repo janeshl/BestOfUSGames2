@@ -17,7 +17,7 @@ function render(){
     <div class="auction-stats"><span>⭐ ${p.rating}/100</span><span>Base ${money(p.base)}</span><span>🔨 Bid ${money(state.currentBid)}</span></div>
     <div class="auction-timer">⏱ <b>${left}s</b></div>
     <p class="auction-leader">${state.currentBidder?`Highest bidder: <b>${esc(state.teams[state.currentBidder].name)}</b>`:'No bids yet'}</p>
-    <button class="btn" ${left<=0?'disabled':''} onclick="bid()"><span>Bid + ₹0.5 Cr</span></button>
+    ${state.auctionClosed ? `<div class="auction-closed">🔨 Auction closed</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?'Finish Auction':'Next Player →'}</span></button>` : `<button class="btn" ${left<=0?'disabled':''} onclick="bid()"><span>Bid + ₹0.5 Cr</span></button>`}
    </div>
    <div class="auction-log card"><h3>Live Auction Updates</h3><div class="auction-log-scroll">${state.logs.slice().reverse().map(x=>`<p>${esc(x)}</p>`).join('')}</div></div>
  </div>`;
@@ -25,5 +25,6 @@ function render(){
 async function start(){try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing Auction</h2><p>AI is selecting a fresh pool of real cricketers...</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();timer=setInterval(tick,1000)}catch(e){app.innerHTML=`<div class="card"><h2>Unable to start auction</h2><p>${esc(e.message)}</p><button class="btn" onclick="start()"><span>Try Again</span></button></div>`}finally{loading=false}}
 async function tick(){if(!sid||loading)return;try{state=await api('/api/auction/tick',{sessionId:sid});render()}catch(e){console.error(e)}}
 async function bid(){try{state=await api('/api/auction/bid',{sessionId:sid});render()}catch(e){alert(e.message)}}
+async function nextPlayer(){try{state=await api('/api/auction/next',{sessionId:sid});render()}catch(e){alert(e.message)}}
 async function results(){try{const r=await api('/api/auction/results',{sessionId:sid});document.getElementById('results').innerHTML=`<h2>🏆 Winner: ${esc(r.winner.name)}</h2>`+r.ranked.map((x,i)=>`<div class="card"><h3>#${i+1} ${esc(x.name)} — ${x.score}/100</h3><p>Spent: ${money(x.spent)} | Remaining: ${money(x.remaining)}</p><p>${x.squad.map(p=>esc(p.name)).join(', ')||'No players purchased'}</p></div>`).join('')}catch(e){alert(e.message)}}
 start();
