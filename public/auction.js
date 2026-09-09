@@ -41,7 +41,7 @@ function render(){
   const teamBoxes=teamIds.map(id=>{
     const t=state.teams[id], sig=state.teamSignals?.[id], c=roleCounts(t);
     const isPlayer=id==='player';
-    const disabled=squadComplete||waiting||finalChance||bidBusy;
+    const disabled=squadComplete||waiting||bidBusy;
     return `<div class="auction-team-box ${isPlayer?'player-team-box':''} ${sig?.type==='bid'?'bid-flash':''}">
       <div class="auction-team-box-head"><div><strong>${esc(t.name)}</strong><small>${t.squad.length}/6 players · Purse ${money(t.purse)}</small></div><div class="auction-bid-symbol">${sig?.type==='bid'?'💰':''}</div></div>
       <div class="auction-role-mini">🏏 ${c['Batsmen']||0} · 🎯 ${c['Bowlers']||0} · ⭐ ${c['All Rounders']||0} · 🧤 ${c['Wicket Keepers']||0}</div>
