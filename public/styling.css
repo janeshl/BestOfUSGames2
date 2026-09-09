@@ -272,3 +272,13 @@ pre.result, .pill{
 /* AI Cricket Auction Arena enhancements */
 .auction-teams-top{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:14px 0}.auction-team-card{border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:12px;background:rgba(255,255,255,.04);display:flex;flex-direction:column;gap:5px}.auction-team-card span{font-weight:700}.auction-team-card small{opacity:.8}.auction-squad-mini{font-size:.78rem;opacity:.75;max-height:38px;overflow:auto}.auction-pool-banner{display:flex;justify-content:space-between;align-items:center;font-weight:800;padding:10px 14px;border-radius:10px;background:rgba(255,255,255,.08);margin-bottom:12px}.compact-auction{grid-template-columns:1.15fr .85fr;gap:12px}.auction-player-card{padding:16px!important}.auction-player-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.auction-player-head h2{margin:0}.auction-tag{font-size:.8rem;padding:6px 9px;border-radius:999px;background:rgba(255,255,255,.1)}.auction-stats{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}.auction-timer{font-size:1.5rem;margin:8px 0}.auction-leader{margin:8px 0}.auction-log{padding:14px!important}.auction-log h3{margin-top:0}.auction-log-scroll{max-height:220px;overflow:auto}.auction-log-scroll p{font-size:.85rem;margin:7px 0;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.08)}
 @media(max-width:760px){.auction-teams-top{grid-template-columns:1fr}.compact-auction{grid-template-columns:1fr}.auction-player-head{align-items:flex-start;flex-direction:column}.auction-pool-banner{font-size:.9rem}}
+
+/* IPL Auction Arena - 20 player / 4 pool rules */
+.auction-rules{margin-bottom:16px;padding:16px;display:grid;gap:10px}
+.auction-pool-list{display:flex;flex-wrap:wrap;gap:8px}
+.auction-pool-list span{padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.08);font-size:.9rem}
+.auction-role-mini{margin-top:7px;font-size:.85rem;opacity:.9}
+.auction-final-rules{margin:14px 0;padding:12px;border-radius:10px;background:rgba(255,255,255,.06)}
+.auction-result-card{margin-top:14px}
+.auction-result-card p{line-height:1.5}
+.auction-timer small{font-size:.75rem;opacity:.75;margin-left:6px}
