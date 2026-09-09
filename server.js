@@ -1098,28 +1098,128 @@ app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${POR
 /* ------------------------
    AI Cricket Auction Arena
 ------------------------- */
-const AUCTION_PLAYERS = [
- {id:'b1',name:'Arjun Blaze',pool:'Batsmen',base:8,rating:92,tag:'Power-Hitter'},
- {id:'b2',name:'Vikram Rao',pool:'Batsmen',base:6,rating:88,tag:'Aggressive Strokeplayer'},
- {id:'b3',name:'Karan Mehta',pool:'Batsmen',base:5,rating:85,tag:'Finisher'},
- {id:'b4',name:'Dev Kapoor',pool:'Batsmen',base:7,rating:90,tag:'All-Format Aggressor'},
- {id:'b5',name:'Rohan Storm',pool:'Batsmen',base:4,rating:82,tag:'Aggressive Strokeplayer'},
- {id:'bo1',name:'Armaan Khan',pool:'Bowlers',base:8,rating:91,tag:'Fast'},
- {id:'bo2',name:'Ravi Patel',pool:'Bowlers',base:6,rating:87,tag:'Swing Bowler'},
- {id:'bo3',name:'Aditya Sharma',pool:'Bowlers',base:7,rating:89,tag:'Spinner'},
- {id:'bo4',name:'Sameer Ali',pool:'Bowlers',base:5,rating:84,tag:'Medium Fast'},
- {id:'bo5',name:'Kabir Singh',pool:'Bowlers',base:4,rating:81,tag:'Fast'},
- {id:'w1',name:'Aryan Joshi',pool:'Wicket Keepers',base:7,rating:90,tag:'Power-Hitting Keeper'},
- {id:'w2',name:'Nikhil Das',pool:'Wicket Keepers',base:5,rating:86,tag:'Reliable Keeper'},
- {id:'w3',name:'Rahul Verma',pool:'Wicket Keepers',base:6,rating:88,tag:'Aggressive Keeper'}
-];
+/* ========================
+   AI Cricket Auction Arena
+======================== */
+const AUCTION_POOL_ORDER = ["Batsmen", "Bowlers", "Wicket Keepers"];
 const auctionSessions = new Map();
 const auctionId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 10);
-function publicAuction(s){ const p=s.players[s.index]; return {ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,roundEndsAt:s.roundEndsAt,teams:s.teams,logs:s.logs.slice(-12),done:s.index>=s.players.length}; }
-function aiMax(team,p){ const roleCount=team.squad.filter(x=>x.pool===p.pool).length; const need=roleCount===0?1.12:1; const style=team.strategy==='aggressive'?1.12:1.02; return Math.min(team.purse, Math.round((p.base+(p.rating-75)*0.22)*need*style*2)/2); }
-function runAgents(s){ const p=s.players[s.index]; if(!p)return; for(const key of ['agent1','agent2']){ const t=s.teams[key]; if(s.highest.bidder===key||t.purse<0.5)continue; const max=aiMax(t,p); const next=Math.round((s.highest.amount+0.5)*2)/2; if(next<=max && Math.random()< (t.strategy==='aggressive'?0.78:0.62)){ s.highest={bidder:key,amount:next}; s.logs.push(`${t.name} bids ₹${next} Cr for ${p.name}`); } } }
-app.post('/api/auction/start',(req,res)=>{ const id=auctionId(); const teams={player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}}; const s={id,players:AUCTION_PLAYERS,index:0,teams,highest:{bidder:null,amount:AUCTION_PLAYERS[0].base},roundEndsAt:Date.now()+30000,logs:[`Auction starts: ${AUCTION_PLAYERS[0].name} at ₹${AUCTION_PLAYERS[0].base} Cr`]}; auctionSessions.set(id,s); res.json(publicAuction(s)); });
-app.post('/api/auction/bid',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'}); if(Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'Time expired. Close this player.'}); const p=s.players[s.index], next=Math.round((s.highest.amount+0.5)*2)/2; if(s.teams.player.purse<next)return res.status(400).json({ok:false,error:'Insufficient purse'}); s.highest={bidder:'player',amount:next}; s.logs.push(`${s.teams.player.name} bids ₹${next} Cr for ${p.name}`); runAgents(s); res.json(publicAuction(s)); });
-app.post('/api/auction/tick',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'}); if(Date.now()<s.roundEndsAt)runAgents(s); res.json(publicAuction(s)); });
-app.post('/api/auction/close',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'}); const p=s.players[s.index]; if(!p)return res.json(publicAuction(s)); if(s.highest.bidder){const t=s.teams[s.highest.bidder]; t.purse=Math.round((t.purse-s.highest.amount)*100)/100; t.squad.push({...p,price:s.highest.amount}); s.logs.push(`SOLD! ${p.name} → ${t.name} for ₹${s.highest.amount} Cr`);}else s.logs.push(`UNSOLD: ${p.name}`); s.index++; if(s.index<s.players.length){const n=s.players[s.index];s.highest={bidder:null,amount:n.base};s.roundEndsAt=Date.now()+30000;s.logs.push(`Next: ${n.name} enters at ₹${n.base} Cr`);} res.json(publicAuction(s)); });
-app.post('/api/auction/results',(req,res)=>{ const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'}); const score=t=>{const avg=t.squad.length?t.squad.reduce((a,p)=>a+p.rating,0)/t.squad.length:0;const roles=new Set(t.squad.map(p=>p.pool)).size;const balance=roles/3*25;const strength=avg/100*55;const value=t.squad.length?Math.min(20,(t.purse/100*10)+10):0;return Math.round(strength+balance+value);}; const ranked=Object.entries(s.teams).map(([id,t])=>({id,name:t.name,score:score(t),spent:100-t.purse,remaining:t.purse,squad:t.squad})).sort((a,b)=>b.score-a.score); res.json({ok:true,ranked,winner:ranked[0]}); });
+
+function auctionFallbackPlayers() {
+  // Fallback is only used when the model/API is unavailable.
+  return [
+    {name:"Suryakumar Yadav",pool:"Batsmen",base:8,rating:92,tag:"All-Format Aggressor"},
+    {name:"Ruturaj Gaikwad",pool:"Batsmen",base:7,rating:88,tag:"Aggressive Strokeplayer"},
+    {name:"Rinku Singh",pool:"Batsmen",base:6,rating:89,tag:"Finisher"},
+    {name:"Travis Head",pool:"Batsmen",base:9,rating:91,tag:"Power-Hitter"},
+    {name:"Shubman Gill",pool:"Batsmen",base:8,rating:90,tag:"Aggressive Strokeplayer"},
+    {name:"Jasprit Bumrah",pool:"Bowlers",base:10,rating:96,tag:"Fast"},
+    {name:"Mohammed Shami",pool:"Bowlers",base:8,rating:90,tag:"Fast"},
+    {name:"Kuldeep Yadav",pool:"Bowlers",base:7,rating:89,tag:"Spinner"},
+    {name:"Trent Boult",pool:"Bowlers",base:8,rating:91,tag:"Swing Bowler"},
+    {name:"Harshal Patel",pool:"Bowlers",base:6,rating:85,tag:"Medium Fast"},
+    {name:"Sanju Samson",pool:"Wicket Keepers",base:8,rating:90,tag:"Aggressive Keeper"},
+    {name:"Ishan Kishan",pool:"Wicket Keepers",base:7,rating:88,tag:"Power-Hitting Keeper"},
+    {name:"Rishabh Pant",pool:"Wicket Keepers",base:9,rating:92,tag:"Finisher Keeper"}
+  ];
+}
+
+const auctionPlayerPoolsPrompt = () => [
+  { role: "system", content: `You are creating a fresh IPL-style cricket auction player list using REAL, well-known professional cricketers. Select a different mix on each request where possible. Return STRICT JSON ONLY: {"players":[...]}. Exactly 13 UNIQUE real cricketers: exactly 5 in pool "Batsmen", exactly 5 in "Bowlers", exactly 3 in "Wicket Keepers". Each object: {"name":"real full name","pool":"Batsmen|Bowlers|Wicket Keepers","base":number,"rating":number,"tag":"string"}. Base price must be a realistic game value between 2 and 10 in 0.5 increments. Rating must be 78-97. Batsmen tags must be one of: Aggressive Strokeplayer, Power-Hitter, Finisher, All-Format Aggressor. Bowlers tags must be one of: Swing Bowler, Spinner, Medium Fast, Fast. Wicket keepers may use: Power-Hitting Keeper, Reliable Keeper, Aggressive Keeper, Finisher Keeper. Prefer active or recent internationally recognized cricketers and do not duplicate a person across pools. Do not invent fictional names. No markdown.` },
+  { role: "user", content: "Create a fresh balanced auction pool now. JSON only." }
+];
+
+async function generateAuctionPlayers(){
+  try {
+    const raw = await chatCompletion(auctionPlayerPoolsPrompt(), 0.8, 1400, {json:true, timeoutMs:30000});
+    const parsed = parseModelJson(raw);
+    const players = Array.isArray(parsed?.players) ? parsed.players : [];
+    const counts = {"Batsmen":0,"Bowlers":0,"Wicket Keepers":0};
+    const seen = new Set();
+    const cleaned = [];
+    for (const x of players) {
+      const name = String(x?.name||"").trim();
+      const pool = String(x?.pool||"").trim();
+      if (!name || !(pool in counts) || seen.has(name.toLowerCase()) || counts[pool] >= (pool==="Wicket Keepers"?3:5)) continue;
+      seen.add(name.toLowerCase()); counts[pool]++;
+      const baseRaw = Number(x.base);
+      const base = Number.isFinite(baseRaw) ? Math.min(10,Math.max(2,Math.round(baseRaw*2)/2)) : 5;
+      const rating = Math.min(97,Math.max(78,Math.round(Number(x.rating)||85)));
+      const tag = String(x.tag||"").trim() || (pool==="Batsmen"?"Aggressive Strokeplayer":pool==="Bowlers"?"Fast":"Reliable Keeper");
+      cleaned.push({id:`${pool}-${cleaned.length+1}`,name,pool,base,rating,tag});
+    }
+    if (counts.Batsmen===5 && counts.Bowlers===5 && counts["Wicket Keepers"]===3) return cleaned;
+  } catch (e) { console.error("Auction AI pool generation failed:", e.message); }
+  return auctionFallbackPlayers().map((x,i)=>({...x,id:`fallback-${i+1}`}));
+}
+
+function publicAuction(s){
+  const p=s.players[s.index];
+  return {ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,roundEndsAt:s.roundEndsAt,teams:s.teams,logs:s.logs.slice(-10),currentBid:s.highest.amount,currentBidder:s.highest.bidder,done:s.index>=s.players.length,poolName:p?.pool||null};
+}
+function aiMax(team,p){
+  const roleCount=team.squad.filter(x=>x.pool===p.pool).length;
+  const need=roleCount===0?1.12:1;
+  const style=team.strategy==='aggressive'?1.12:1.02;
+  return Math.min(team.purse, Math.round((p.base+(p.rating-75)*0.22)*need*style*2)/2);
+}
+function runAgents(s){
+  const p=s.players[s.index]; if(!p || Date.now()>=s.roundEndsAt)return;
+  for(const key of ['agent1','agent2']){
+    const t=s.teams[key]; if(s.highest.bidder===key||t.purse<0.5)continue;
+    const max=aiMax(t,p), next=Math.round((s.highest.amount+0.5)*2)/2;
+    if(next<=max && Math.random()<(t.strategy==='aggressive'?0.78:0.62)){
+      s.highest={bidder:key,amount:next};
+      s.logs.push(`${t.name} bids ₹${next} Cr for ${p.name}`);
+    }
+  }
+}
+function settleCurrentPlayer(s){
+  const p=s.players[s.index]; if(!p)return;
+  if(s.highest.bidder){
+    const t=s.teams[s.highest.bidder];
+    t.purse=Math.round((t.purse-s.highest.amount)*100)/100;
+    t.squad.push({...p,price:s.highest.amount});
+    s.logs.push(`SOLD! ${p.name} → ${t.name} for ₹${s.highest.amount} Cr`);
+  } else s.logs.push(`UNSOLD: ${p.name} (no bids)`);
+  s.index++;
+  if(s.index<s.players.length){
+    const n=s.players[s.index]; s.highest={bidder:null,amount:n.base}; s.roundEndsAt=Date.now()+30000;
+    s.logs.push(`Pool: ${n.pool} | Next: ${n.name} enters at ₹${n.base} Cr`);
+  }
+}
+
+app.post('/api/auction/start', async (req,res)=>{
+  try {
+    const players = await generateAuctionPlayers();
+    const id=auctionId();
+    const teams={player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}};
+    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},roundEndsAt:Date.now()+30000,logs:[`Pool: ${players[0].pool} | Auction starts: ${players[0].name} at ₹${players[0].base} Cr`]};
+    auctionSessions.set(id,s); res.json(publicAuction(s));
+  } catch(e){res.status(500).json({ok:false,error:e.message||'Unable to start auction'});}
+});
+app.post('/api/auction/bid',(req,res)=>{
+  const s=auctionSessions.get(req.body.sessionId);
+  if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'});
+  if(Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'This player auction has closed.'});
+  const p=s.players[s.index], next=Math.round((s.highest.amount+0.5)*2)/2;
+  if(s.teams.player.purse<next)return res.status(400).json({ok:false,error:'Insufficient purse'});
+  s.highest={bidder:'player',amount:next}; s.logs.push(`${s.teams.player.name} bids ₹${next} Cr for ${p.name}`); runAgents(s);
+  res.json(publicAuction(s));
+});
+app.post('/api/auction/tick',(req,res)=>{
+  const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
+  if(s.index<s.players.length){
+    if(Date.now()>=s.roundEndsAt) settleCurrentPlayer(s);
+    else runAgents(s);
+  }
+  res.json(publicAuction(s));
+});
+app.post('/api/auction/results',(req,res)=>{
+  const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
+  if(s.index<s.players.length)return res.status(400).json({ok:false,error:'Finish all player auctions first.'});
+  const score=t=>{const avg=t.squad.length?t.squad.reduce((a,p)=>a+p.rating,0)/t.squad.length:0;const roles=new Set(t.squad.map(p=>p.pool)).size;const balance=roles/3*25;const strength=avg/100*55;const value=t.squad.length?Math.min(20,(t.purse/100*10)+10):0;return Math.round(strength+balance+value);};
+  const ranked=Object.entries(s.teams).map(([id,t])=>({id,name:t.name,score:score(t),spent:100-t.purse,remaining:t.purse,squad:t.squad})).sort((a,b)=>b.score-a.score);
+  res.json({ok:true,ranked,winner:ranked[0]});
+});
+
