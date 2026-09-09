@@ -1,4 +1,4 @@
-let sid=null,state=null,countdownTimer=null,syncTimer=null,loading=false;
+let sid=null,state=null,countdownTimer=null,syncTimer=null,loading=false,bidBusy=false;
 const app=document.getElementById('auctionApp');
 
 async function api(url,data={}){
@@ -13,6 +13,7 @@ function money(n){return `₹${Number(n).toFixed(1)} Cr`}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function roleIcon(role){return ({'Batsmen':'🏏','Bowlers':'🎯','All Rounders':'⭐','Wicket Keepers':'🧤'})[role]||'•'}
 function remaining(){return state?Math.max(0,Math.ceil((state.roundEndsAt-Date.now())/1000)):0}
+function pendingAcceptance(){const p=state?.pendingBid;if(!p)return 0;return Math.max(0,Math.ceil((p.acceptAt-Date.now())/1000))}
 function updateCountdown(){
   const el=document.getElementById('auctionCountdown');
   if(el)el.textContent=`${remaining()}s`;
@@ -36,13 +37,16 @@ function render(){
     clearInterval(syncTimer); clearInterval(countdownTimer);
     app.innerHTML=`<div class="auction-results card">
       <h2>🏆 All 20 Players Auctioned</h2>
-      <p>The auction is complete. Teams with fewer than 5 buys or without at least 1 batsman, 1 bowler and 1 wicket keeper are disqualified.</p>
+      <p>The auction is complete. Each player had a 15-second bidding window, and every player/AI bid required a 2-second auctioneer acceptance delay. Teams with fewer than 5 buys or without at least 1 batsman, 1 bowler and 1 wicket keeper are disqualified.</p>
       <div class="auction-final-rules"><b>Winner assessment:</b> player ratings, squad variety, role availability, purse-spending tactic and overall auction strategy.</div>
       <button class="btn" onclick="results()"><span>Evaluate Teams</span></button><div id="results"></div>
     </div>`;
     return;
   }
   const p=state.current,left=remaining(),teams=Object.values(state.teams).map(renderTeam).join('');
+  const pending=state.pendingBid;
+  const playerPending=pending?.bidder==='player';
+  const pendingText=pending ? `${esc(state.teams[pending.bidder]?.name||'Bidder')} — ₹${Number(pending.amount).toFixed(1)} Cr (accepting in ${pendingAcceptance()}s)` : 'No bid awaiting auctioneer acceptance';
   const counts=state.poolCounts||{'Batsmen':6,'Bowlers':6,'All Rounders':5,'Wicket Keepers':3};
   const poolSummary=Object.entries(counts).map(([role,n])=>`<span>${roleIcon(role)} ${esc(role)}: ${n}</span>`).join('');
   const playerNumber=state.index+1;
@@ -58,9 +62,10 @@ function render(){
       <div class="auction-player-card card">
         <div class="auction-player-head"><h2>${esc(p.name)}</h2><span class="auction-tag">${esc(p.tag)}</span></div>
         <div class="auction-stats"><span>⭐ ${p.rating}/100</span><span>Base ${money(p.base)}</span><span>🔨 Bid ${money(state.currentBid)}</span></div>
-        <div class="auction-timer">⏱ <b id="auctionCountdown">${left}s</b> <small>10-second round</small></div>
+        <div class="auction-timer">⏱ <b id="auctionCountdown">${left}s</b> <small>15-second bidding window</small></div>
+        <div class="auction-pending">⏳ ${pendingText}</div>
         <p class="auction-leader">${state.currentBidder?`Highest bidder: <b>${esc(state.teams[state.currentBidder].name)}</b>`:'No bids yet'}</p>
-        ${state.auctionClosed ? `<div class="auction-closed">🔨 Auction closed</div><button class="btn" onclick="nextPlayer()"><span>${playerNumber>=20?'Finish Auction':'Next Player →'}</span></button>` : `<button class="btn" ${left<=0?'disabled':''} onclick="bid()"><span>Bid + ₹0.5 Cr</span></button>`}
+        ${state.auctionClosed ? `<div class="auction-closed">🔨 Auction closed</div><button class="btn" onclick="nextPlayer()"><span>${playerNumber>=20?'Finish Auction':'Next Player →'}</span></button>` : `<button class="btn" ${(left<=0||playerPending||bidBusy)?'disabled':''} onclick="bid()"><span>${playerPending?'⏳ Bid awaiting acceptance':'Bid + ₹0.5 Cr'}</span></button>`}
       </div>
       <div class="auction-log card"><h3>Live Auction Updates</h3><div class="auction-log-scroll">${state.logs.slice().reverse().map(x=>`<p>${esc(x)}</p>`).join('')}</div></div>
     </div>`;
@@ -75,7 +80,7 @@ async function start(){
     render();
     clearInterval(syncTimer);clearInterval(countdownTimer);
     countdownTimer=setInterval(updateCountdown,250);
-    syncTimer=setInterval(tick,2000);
+    syncTimer=setInterval(tick,1000);
   }catch(e){
     app.innerHTML=`<div class="card"><h2>Unable to start auction</h2><p>${esc(e.message)}</p><button class="btn" onclick="start()"><span>Try Again</span></button></div>`;
   }finally{loading=false}
@@ -86,8 +91,11 @@ async function tick(){
   catch(e){console.error('Auction sync:',e.message)}
 }
 async function bid(){
+  if(bidBusy)return;
+  bidBusy=true;
   try{state=await api('/api/auction/bid',{sessionId:sid});render();}
   catch(e){alert(e.message)}
+  finally{bidBusy=false;render();}
 }
 async function nextPlayer(){
   try{state=await api('/api/auction/next',{sessionId:sid});render();}
