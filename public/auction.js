@@ -32,16 +32,19 @@ function render(){
   const leader=state.currentBidder?state.teams[state.currentBidder].name:null;
   const yourTeam=state.teams?.player, squadComplete=yourTeam&&yourTeam.squad.length>=6;
   const finalChance=!!state.finalChance;
+  const closeReady=!!state.closeReady;
   const status=finalChance
-    ? '🔔 FINAL CALL — Your Team gets the last chance. Raise the bid or confirm No Interest to close.'
-    : waiting
-      ? `🔨 Auctioneer: ${close>0?`Bid accepted. ${close}s pause before the next bid.`:'Processing the next bid…'}`
-      : '🎙️ Auctioneer: Bidding is open. Take your time.';
+    ? '🔔 FINAL CALL — Auctioneer is closing this player.'
+    : closeReady
+      ? '🔨 AUCTIONEER CAN CLOSE — No higher bid arrived in 5 seconds.'
+      : waiting
+        ? `🔨 Auctioneer: ${close>0?`Bid accepted. ${close}s response window for the other teams.`:'Processing AI responses…'}`
+        : '🎙️ Auctioneer: Bidding is open. Take your time.';
   const teamIds=['player','agent1','agent2'];
   const teamBoxes=teamIds.map(id=>{
     const t=state.teams[id], sig=state.teamSignals?.[id], c=roleCounts(t);
     const isPlayer=id==='player';
-    const disabled=squadComplete||waiting||bidBusy;
+    const disabled=squadComplete||waiting||closeReady||bidBusy;
     return `<div class="auction-team-box ${isPlayer?'player-team-box':''} ${sig?.type==='bid'?'bid-flash':''}">
       <div class="auction-team-box-head"><div><strong>${esc(t.name)}</strong><small>${t.squad.length}/6 players · Purse ${money(t.purse)}</small></div><div class="auction-bid-symbol">${sig?.type==='bid'?'💰':''}</div></div>
       <div class="auction-role-mini">🏏 ${c['Batsmen']||0} · 🎯 ${c['Bowlers']||0} · ⭐ ${c['All Rounders']||0} · 🧤 ${c['Wicket Keepers']||0}</div>
@@ -64,17 +67,18 @@ function render(){
       <div class="auction-log card"><h3>Live Auction Updates</h3><div class="auction-log-scroll">${state.logs.slice().reverse().map(x=>`<p>${esc(x)}</p>`).join('')}</div></div>
     </div>
     <div class="auction-teams-bottom">${teamBoxes}</div>
-    <div class="auction-next-row">${state.auctionClosed?`<div class="auction-closed">🔨 ${state.currentBidder?'SOLD':'UNSOLD'} — Auction closed.</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?(state.phase==='main'?'Open Unsold Players Pool →':'Finish Auction'):'Next Player →'}</span></button>`:''}</div>`;
+    <div class="auction-next-row">${state.auctionClosed?`<div class="auction-closed">🔨 ${state.currentBidder?'SOLD':'UNSOLD'} — Auction closed.</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?(state.phase==='main'?'Open Unsold Players Pool →':'Finish Auction'):'Next Player →'}</span></button>`:closeReady?`<button class="btn auction-close-btn" onclick="closeAuction()"><span>🔨 Close Auction</span></button>`:''}</div>`;
 }
 
 async function start(){
-  try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing 20-player Auction</h2><p>No fixed auction timer. You control the pace; the auctioneer closes after 3 seconds without a higher bid.</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();clearInterval(syncTimer);syncTimer=setInterval(tick,900);}
+  try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing 20-player Auction</h2><p>AI teams respond with a bid or NO INTEREST. After a player bid, the auctioneer gets a Close Auction button when 5 seconds pass without a higher bid.</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();clearInterval(syncTimer);syncTimer=setInterval(tick,900);}
   catch(e){app.innerHTML=`<div class="card"><h2>Unable to start auction</h2><p>${esc(e.message)}</p><button class="btn" onclick="start()"><span>Try Again</span></button></div>`}
   finally{loading=false}
 }
 async function tick(){if(!sid||loading)return;try{state=await api('/api/auction/tick',{sessionId:sid});render()}catch(e){console.error('Auction sync:',e.message)}}
 async function bid(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/auction/bid',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
 async function skipPlayer(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/auction/skip',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
+async function closeAuction(){if(bidBusy)return;bidBusy=true;try{state=await api('/api/auction/close',{sessionId:sid});render()}catch(e){alert(e.message)}finally{bidBusy=false;render()}}
 async function nextPlayer(){try{state=await api('/api/auction/next',{sessionId:sid});render()}catch(e){alert(e.message)}}
 async function results(){
   try{const r=await api('/api/auction/results',{sessionId:sid});document.getElementById('results').innerHTML=`<h2>🏆 Winner: ${esc(r.winner.name)} ${r.winner.disqualified?'(all teams disqualified)':''}</h2>`+r.ranked.map((x,i)=>{const b=x.analysis?.breakdown||{},roles=x.analysis?.roleCounts||{};const status=x.disqualified?`❌ DISQUALIFIED — ${esc((x.analysis?.reasons||[]).join('; '))}`:`✅ Eligible`;return `<div class="card auction-result-card"><h3>#${i+1} ${esc(x.name)} — ${x.score}/100</h3><p><b>${status}</b></p><p>Rating: ${x.analysis?.avgRating||0} avg · Spent: ${money(x.spent)} · Remaining: ${money(x.remaining)} · Avg buy: ${money(x.analysis?.avgPrice||0)}</p><p>🏏 ${roles['Batsmen']||0} · 🎯 ${roles['Bowlers']||0} · ⭐ ${roles['All Rounders']||0} · 🧤 ${roles['Wicket Keepers']||0}</p><p><b>Assessment:</b> Rating ${b.rating||0}/25 · Variety ${b.variety||0}/20 · Role availability ${b.roleAvailability||0}/20 · Squad completeness ${b.squadCompleteness||0}/10 · Spending tactic ${b.spendingTactic||0}/15 · Strategy/fit ${b.strategyFit||0}/10</p><p><b>Players:</b> ${x.squad.map(p=>`${esc(p.name)} — ${money(p.price)}`).join(', ')||'No players purchased'}</p></div>`}).join('')}
