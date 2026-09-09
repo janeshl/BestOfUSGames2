@@ -1104,8 +1104,8 @@ app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${POR
 // -----------------------------------------------------------------------------
 // AI Cricket Auction Arena - open-ended auction with 3-second auctioneer close
 // -----------------------------------------------------------------------------
-const AUCTION_POOL_ORDER = ["Batsmen", "Bowlers", "All Rounders", "Wicket Keepers"];
-const AUCTION_POOL_COUNTS = {"Batsmen":6,"Bowlers":6,"All Rounders":5,"Wicket Keepers":3};
+const AUCTION_POOL_ORDER = ["Batsmen", "Wicket Keepers", "Bowlers", "All Rounders"];
+const AUCTION_POOL_COUNTS = {"Batsmen":6,"Wicket Keepers":3,"Bowlers":6,"All Rounders":5};
 const AUCTION_PHASES = ["main", "unsold"];
 const AUCTION_CLOSE_WAIT_MS = 5000;
 const AUCTION_AI_MIN_DELAY_MS = 1400;
@@ -1127,6 +1127,9 @@ function auctionFallbackPlayers() {
     {name:"Yashasvi Jaiswal",pool:"Batsmen",base:7,rating:91,tag:"Explosive Opener"},
     {name:"Suryakumar Yadav",pool:"Batsmen",base:9,rating:94,tag:"360 Degree Batter"},
     {name:"Rinku Singh",pool:"Batsmen",base:5,rating:84,tag:"Finisher"},
+    {name:"Rishabh Pant",pool:"Wicket Keepers",base:9,rating:92,tag:"Attacking Keeper"},
+    {name:"KL Rahul",pool:"Wicket Keepers",base:8,rating:89,tag:"Keeper Batter"},
+    {name:"Sanju Samson",pool:"Wicket Keepers",base:8,rating:90,tag:"Explosive Keeper"},
     {name:"Jasprit Bumrah",pool:"Bowlers",base:10,rating:97,tag:"Elite Pacer"},
     {name:"Mohammed Shami",pool:"Bowlers",base:8,rating:91,tag:"Seam Leader"},
     {name:"Kuldeep Yadav",pool:"Bowlers",base:6,rating:88,tag:"Wrist Spinner"},
@@ -1137,15 +1140,12 @@ function auctionFallbackPlayers() {
     {name:"Ravindra Jadeja",pool:"All Rounders",base:9,rating:92,tag:"Complete All-Rounder"},
     {name:"Axar Patel",pool:"All Rounders",base:7,rating:88,tag:"Utility All-Rounder"},
     {name:"Andre Russell",pool:"All Rounders",base:8,rating:90,tag:"Power Hitter"},
-    {name:"Liam Livingstone",pool:"All Rounders",base:7,rating:87,tag:"Dynamic All-Rounder"},
-    {name:"Rishabh Pant",pool:"Wicket Keepers",base:9,rating:92,tag:"Attacking Keeper"},
-    {name:"KL Rahul",pool:"Wicket Keepers",base:8,rating:89,tag:"Keeper Batter"},
-    {name:"Sanju Samson",pool:"Wicket Keepers",base:8,rating:90,tag:"Explosive Keeper"}
+    {name:"Liam Livingstone",pool:"All Rounders",base:7,rating:87,tag:"Dynamic All-Rounder"}
   ];
 }
 
 const auctionPlayerPoolsPrompt = () => [
-  { role: "system", content: `You are creating a fresh IPL-style cricket auction player list using REAL, well-known professional cricketers. Return STRICT JSON ONLY: {"players":[...]}. Exactly 20 UNIQUE real cricketers, in this exact distribution: 6 "Batsmen", 6 "Bowlers", 5 "All Rounders", 3 "Wicket Keepers". Each object: {"name":"real full name","pool":"Batsmen|Bowlers|All Rounders|Wicket Keepers","base":number,"rating":number,"tag":"string"}. Base price 2-10 in 0.5 increments. Rating 78-97. Make ratings and prices varied enough for strategic bidding. Do not invent fictional names. No markdown.` },
+  { role: "system", content: `You are creating a fresh IPL-style cricket auction player list using REAL, well-known professional cricketers. Return STRICT JSON ONLY: {"players":[...]}. Exactly 20 UNIQUE real cricketers, in this exact pool order and distribution: 6 "Batsmen", 3 "Wicket Keepers", 6 "Bowlers", 5 "All Rounders". Each object: {"name":"real full name","pool":"Batsmen|Bowlers|All Rounders|Wicket Keepers","base":number,"rating":number,"tag":"string"}. Base price 2-10 in 0.5 increments. Rating 78-97. Make ratings and prices varied enough for strategic bidding. Do not invent fictional names. No markdown.` },
   { role: "user", content: "Create a fresh balanced 20-player auction pool now. JSON only." }
 ];
 
@@ -1183,7 +1183,7 @@ function publicAuction(s){
     done,poolName:s.phase==='unsold'?'Unsold Players':(p?.pool||null),phase:s.phase,
     unsoldCount:s.unsoldPlayers?.length||0,poolCounts:AUCTION_POOL_COUNTS,
     waitingForClose:s.waitingForClose,closeAt:s.closeAt||null,finalChance:!!s.finalChance,closeReady:!!s.closeReady,teamSignals:s.teamSignals||{},
-    rules:{minSquad:AUCTION_MIN_SQUAD,maxSquad:AUCTION_MAX_SQUAD,requiredRoles:AUCTION_REQUIRED_ROLES,closeWaitSeconds:AUCTION_CLOSE_WAIT_MS/1000,unsoldReauction:true}
+    rules:{minSquad:AUCTION_MIN_SQUAD,maxSquad:AUCTION_MAX_SQUAD,requiredRoles:AUCTION_REQUIRED_ROLES,closeWaitSeconds:AUCTION_CLOSE_WAIT_MS/1000,unsoldReauction:true,allTeamsComplete:Object.values(s.teams||{}).every(t=>t.squad.length>=AUCTION_MAX_SQUAD)}
   };
 }
 function teamRoleCounts(team){
@@ -1416,22 +1416,22 @@ app.post('/api/auction/skip',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId);
   if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'});
   if(s.auctionClosed)return res.status(400).json({ok:false,error:'This player is already closed.'});
-  if(s.finalChance){
-    s.logs.push(`Your Team: NO INTEREST after Final Call. Auctioneer closes the bidding for ${s.players[s.index].name}.`);
-    settleCurrentPlayer(s);
-    return res.json(publicAuction(s));
-  }
+  const p=s.players[s.index];
   s.playerSkipped=true;
   s.finalChance=false;
+  s.closeReady=false;
   s.waitingForClose=false;
-  const p=s.players[s.index];
+  s.closeAt=null;
   s.teamSignals=s.teamSignals||{};
   s.teamSignals.player={type:'pass',text:'🚫 NO INTEREST',at:Date.now()};
-  s.closeReady=false;
-  s.closeAt=Date.now()+AUCTION_CLOSE_WAIT_MS;
-  s.waitingForClose=true;
-  s.nextAgentDecisionAt=Date.now()+700;
-  s.logs.push(`Your Team: NO INTEREST in ${p.name}. AI teams have 5 seconds to bid before the auctioneer may close.`);
+  if(s.highest.bidder){
+    s.logs.push(`Your Team: NO INTEREST in ${p.name}. The existing highest bidder remains in contention.`);
+    // If an AI already wants the player, the player can safely skip; the AI wins.
+    settleCurrentPlayer(s);
+  } else {
+    s.logs.push(`Your Team: SKIPPED ${p.name}. No team is interested — player is UNSOLD.`);
+    settleCurrentPlayer(s);
+  }
   res.json(publicAuction(s));
 });
 
@@ -1506,6 +1506,21 @@ app.post('/api/auction/next',(req,res)=>{
     s.highest={bidder:null,amount:0};
     s.logs.push('Auctioneer: Unsold Players pool complete. Auction finished.');
   }
+  res.json(publicAuction(s));
+});
+
+app.post('/api/auction/finish',(req,res)=>{
+  const s=auctionSessions.get(req.body.sessionId);
+  if(!s)return res.status(404).json({ok:false,error:'Session not found'});
+  const allComplete=Object.values(s.teams||{}).every(t=>t.squad.length>=AUCTION_MAX_SQUAD);
+  if(!allComplete)return res.status(409).json({ok:false,error:`All 3 teams must complete their ${AUCTION_MAX_SQUAD}-player squads before finishing early.`});
+  s.done=true;
+  s.auctionClosed=true;
+  s.waitingForClose=false;
+  s.finalChance=false;
+  s.closeReady=false;
+  s.closeAt=null;
+  s.logs.push('🏁 Auction finished early — all 3 teams have completed their 6-player squads.');
   res.json(publicAuction(s));
 });
 
