@@ -21,40 +21,52 @@ function render(){
   if(!state)return;
   if(state.done){
     clearInterval(syncTimer);
-    app.innerHTML=`<div class="auction-results card"><h2>🏆 Auction Complete</h2><p>The main 20-player auction is followed by a dedicated <b>Unsold Players</b> re-auction. Every player who received no bid gets one more chance. There was no fixed timer: the auctioneer closes each player after 3 seconds without a higher bid. Teams with fewer than 5 buys or without at least 1 batsman, 1 bowler and 1 wicket keeper are disqualified.</p><div class="auction-final-rules"><b>Winner assessment:</b> player ratings, squad variety, role availability, purse-spending tactic and overall auction strategy.</div><button class="btn" onclick="results()"><span>Evaluate Teams</span></button><div id="results"></div></div>`;
+    app.innerHTML=`<div class="auction-results card"><h2>🏆 Auction Complete</h2><p>The main auction is followed by the <b>Unsold Players</b> second-chance pool. Every unsold player gets one more opportunity. Teams with fewer than 5 buys or without at least 1 batsman, 1 bowler and 1 wicket keeper are disqualified.</p><div class="auction-final-rules"><b>Winner assessment:</b> player ratings, squad variety, role availability, purse-spending tactic and overall auction strategy.</div><button class="btn" onclick="results()"><span>Evaluate Teams</span></button><div id="results"></div></div>`;
     return;
   }
-  const p=state.current,teams=Object.values(state.teams).map(renderTeam).join('');
+  const p=state.current;
   if(!p){ app.innerHTML='<div class="card"><h2>Preparing the next auction pool…</h2></div>'; return; }
   const counts=state.poolCounts||{'Batsmen':6,'Bowlers':6,'All Rounders':5,'Wicket Keepers':3};
   const poolSummary=Object.entries(counts).map(([role,n])=>`<span>${roleIcon(role)} ${esc(role)}: ${n}</span>`).join('');
-  const waiting=state.waitingForClose;
-  const close=closeRemaining();
+  const waiting=state.waitingForClose, close=closeRemaining();
   const leader=state.currentBidder?state.teams[state.currentBidder].name:null;
-  const yourTeam=state.teams?.player;
-  const squadComplete=yourTeam&&yourTeam.squad.length>=6;
-  const status=waiting
-    ? `🔨 Auctioneer: ${close>0?`Going once… waiting ${close}s for a higher bid.`:'Closing the bid…'}`
-    : '🎙️ Auctioneer: Bidding is open. Take your time — the AI will not instantly counter.';
+  const yourTeam=state.teams?.player, squadComplete=yourTeam&&yourTeam.squad.length>=6;
+  const finalChance=!!state.finalChance;
+  const status=finalChance
+    ? '🔔 FINAL CALL — Your Team gets the last chance. Raise the bid or confirm No Interest to close.'
+    : waiting
+      ? `🔨 Auctioneer: ${close>0?`Bid accepted. ${close}s pause before the next bid.`:'Processing the next bid…'}`
+      : '🎙️ Auctioneer: Bidding is open. Take your time.';
+  const teamIds=['player','agent1','agent2'];
+  const teamBoxes=teamIds.map(id=>{
+    const t=state.teams[id], sig=state.teamSignals?.[id], c=roleCounts(t);
+    const isPlayer=id==='player';
+    const disabled=squadComplete||waiting||finalChance||bidBusy;
+    return `<div class="auction-team-box ${isPlayer?'player-team-box':''} ${sig?.type==='bid'?'bid-flash':''}">
+      <div class="auction-team-box-head"><div><strong>${esc(t.name)}</strong><small>${t.squad.length}/6 players · Purse ${money(t.purse)}</small></div><div class="auction-bid-symbol">${sig?.type==='bid'?'💰':''}</div></div>
+      <div class="auction-role-mini">🏏 ${c['Batsmen']||0} · 🎯 ${c['Bowlers']||0} · ⭐ ${c['All Rounders']||0} · 🧤 ${c['Wicket Keepers']||0}</div>
+      <div class="auction-team-action">${isPlayer
+        ? `<button class="btn auction-bid-btn" ${disabled?'disabled':''} onclick="bid()"><span>${squadComplete?'🔒 Squad Complete':'💰 Bid + ₹0.5 Cr'}</span></button><button class="btn auction-skip-btn" ${bidBusy||(!finalChance&&!state.current)?'disabled':''} onclick="skipPlayer()"><span>🚫 No Interest</span></button>`
+        : `<div class="ai-live-action ${sig?.type==='bid'?'active':''}">${sig?.type==='bid'?`💰 ${esc(sig.text)}`:'🤖 Waiting / NO INTEREST'}</div>`}</div>
+      <div class="auction-squad-mini">${t.squad.map(x=>`${esc(x.name)} (${money(x.price)})`).join(', ')||'No purchases yet'}</div>
+    </div>`;
+  }).join('');
   app.innerHTML=`
-    <div class="auction-rules card"><div><b>${state.phase==='unsold'?'Unsold Players — Second Chance Pool':'20-player main auction'}</b> · No fixed timer</div><div class="auction-pool-list">${poolSummary}</div><div><b>Squad:</b> 5–6 buys · Must include 🧤 1 WK, 🏏 1 batsman, 🎯 1 bowler</div><div><b>Unsold pool:</b> every unsold player gets one second chance after the main 20.</div></div>
-    <div class="auction-teams-top">${teams}</div>
-    <div class="auction-pool-banner">POOL: ${roleIcon(state.poolName)} ${esc(state.poolName)} <span>Player ${state.index+1}/${state.total}${state.phase==='unsold'?' · Second Chance':''}</span></div>
-    <div class="auction-main compact-auction">
+    <div class="auction-rules card compact-rules"><div><b>${state.phase==='unsold'?'🔁 Unsold Players — Second Chance Pool':'🏏 20-player Main Auction'}</b> · No fixed countdown</div><div class="auction-pool-list">${poolSummary}</div><div><b>Squad:</b> 5–6 buys · 🧤 WK + 🏏 batsman + 🎯 bowler required · Bidding locks at 6 players</div></div>
+    <div class="auction-top-compact">
       <div class="auction-player-card card">
-        <div class="auction-player-head"><h2>${esc(p.name)}</h2><span class="auction-tag">${esc(p.tag)}</span></div>
+        <div class="auction-player-head"><h2>${esc(p.name)}</h2><span class="auction-tag">${esc(p.pool)}</span></div>
         <div class="auction-stats"><span>⭐ ${p.rating}/100</span><span>Base ${money(p.base)}</span><span>🔨 Current ${money(state.currentBid)}</span></div>
-        <div class="auction-status ${waiting?'waiting':''}">${status}</div>
-        <p class="auction-leader">${leader?`Highest bidder: <b>${esc(leader)}</b>`:'No accepted bids yet'}</p>
-        <div class="auction-actions">
-          <button class="btn" ${bidBusy||waiting||squadComplete?'disabled':''} onclick="bid()"><span>${squadComplete?'🔒 Squad Complete — Bidding Disabled':'💰 Raise Bid + ₹0.5 Cr'}</span></button>
-          <button class="btn auction-skip-btn" ${waiting||bidBusy?'disabled':''} onclick="skipPlayer()"><span>🚫 No Interest / Skip</span></button>
-        </div>
-        ${state.auctionClosed?`<div class="auction-closed">🔨 ${state.currentBidder?'SOLD':'UNSOLD'} — Auctioneer has closed the bid.</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?(state.phase==='main'?'Open Unsold Players Pool →':'Finish Auction'):'Next Player →'}</span></button>`:''}
+        <p class="auction-leader">${leader?`Highest bid: <b>${esc(leader)}</b>`:'No accepted bid yet'}</p>
+        <div class="auction-status ${waiting||finalChance?'waiting':''}">${status}</div>
+        ${finalChance?'<div class="final-call-box">⚠️ Final chance: bid once more, or press <b>No Interest</b> to confirm that the auctioneer may close this player.</div>':''}
       </div>
       <div class="auction-log card"><h3>Live Auction Updates</h3><div class="auction-log-scroll">${state.logs.slice().reverse().map(x=>`<p>${esc(x)}</p>`).join('')}</div></div>
-    </div>`;
+    </div>
+    <div class="auction-teams-bottom">${teamBoxes}</div>
+    <div class="auction-next-row">${state.auctionClosed?`<div class="auction-closed">🔨 ${state.currentBidder?'SOLD':'UNSOLD'} — Auction closed.</div><button class="btn" onclick="nextPlayer()"><span>${state.index+1>=state.total?(state.phase==='main'?'Open Unsold Players Pool →':'Finish Auction'):'Next Player →'}</span></button>`:''}</div>`;
 }
+
 async function start(){
   try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing 20-player Auction</h2><p>No fixed auction timer. You control the pace; the auctioneer closes after 3 seconds without a higher bid.</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();clearInterval(syncTimer);syncTimer=setInterval(tick,900);}
   catch(e){app.innerHTML=`<div class="card"><h2>Unable to start auction</h2><p>${esc(e.message)}</p><button class="btn" onclick="start()"><span>Try Again</span></button></div>`}
