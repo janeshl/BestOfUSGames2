@@ -186,16 +186,31 @@ function html(e,m){if(e)e.innerHTML=m}
 
   startForm.addEventListener('submit',async e=>{
     e.preventDefault();
-    const topic=e.target.topic.value.trim(); e.target.topic.value='';
-    html(playerChat,'<div class="pill">Preparing the battle...</div>'); html(agentChat,'');
+    const topic=e.target.topic.value.trim();
+    if(!topic){ return; }
+    const startBtn=startForm.querySelector('button[type="submit"]');
+    const oldLabel=startBtn?.textContent;
+    if(startBtn){ startBtn.disabled=true; startBtn.textContent='Starting...'; }
+    $('#game').style.display='block';
+    html(playerChat,'<div class="pill">Preparing the battle and selecting a hard character...</div>');
+    html(agentChat,'<div class="pill">AI Detective is getting ready...</div>');
     try{
-      const json=await (await fetch('/api/character/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic})})).json();
-      if(!json.ok){html(playerChat,'Error: '+(json.error||'Unknown error'));return;}
-      sessionId=json.sessionId; finalReady=false; $('#game').style.display='block'; turnForm.style.display='flex'; finalWrap.style.display='none'; html(playerChat,''); html(agentChat,''); html(result,'');
-      push(playerChat,'Game Master','Battle started. Your answers stay on your side. The AI Detective has its own private investigation.');
-      push(agentChat,'AI Detective','Investigation started. I will ask my own questions after your turns.');
+      const response=await fetch('/api/character/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic})});
+      let json;
+      try { json=await response.json(); }
+      catch { throw new Error(`Server returned HTTP ${response.status}. Check the server console.`); }
+      if(!response.ok || !json.ok){ throw new Error(json.error||`Unable to start battle (HTTP ${response.status}).`); }
+      sessionId=json.sessionId; finalReady=false; e.target.topic.value='';
+      turnForm.style.display='flex'; finalWrap.style.display='none'; html(playerChat,''); html(agentChat,''); html(result,'');
+      push(playerChat,'Game Master','Battle started. Your answers stay private. Ask your first question.');
+      push(agentChat,'AI Detective','Investigation started. I will ask my own private question after your turn.');
       setText(rounds,'Rounds left: 10'); updateAgent({status:'Ready to investigate',confidence:0});
-    }catch{html(playerChat,'Network error. Please try again.');}
+    }catch(err){
+      html(playerChat,'<div class="pill">❌ '+String(err.message||'Unable to start the battle.')+'</div>');
+      html(agentChat,'<div class="pill">Waiting for the battle to start...</div>');
+    }finally{
+      if(startBtn){ startBtn.disabled=false; startBtn.textContent=oldLabel||'Start Battle'; }
+    }
   });
 
   turnForm?.addEventListener('submit',async e=>{
