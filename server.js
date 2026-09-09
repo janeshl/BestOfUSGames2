@@ -1155,7 +1155,7 @@ async function generateAuctionPlayers(){
 
 function publicAuction(s){
   const p=s.players[s.index];
-  return {ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,roundEndsAt:s.roundEndsAt,teams:s.teams,logs:s.logs.slice(-10),currentBid:s.highest.amount,currentBidder:s.highest.bidder,done:s.index>=s.players.length,poolName:p?.pool||null};
+  return {ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,roundEndsAt:s.roundEndsAt,auctionClosed:!!s.auctionClosed,teams:s.teams,logs:s.logs.slice(-10),currentBid:s.highest.amount,currentBidder:s.highest.bidder,done:s.index>=s.players.length,poolName:p?.pool||null};
 }
 function aiMax(team,p){
   const roleCount=team.squad.filter(x=>x.pool===p.pool).length;
@@ -1175,6 +1175,7 @@ function runAgents(s){
   }
 }
 function settleCurrentPlayer(s){
+  if(s.auctionClosed) return;
   const p=s.players[s.index]; if(!p)return;
   if(s.highest.bidder){
     const t=s.teams[s.highest.bidder];
@@ -1182,11 +1183,8 @@ function settleCurrentPlayer(s){
     t.squad.push({...p,price:s.highest.amount});
     s.logs.push(`SOLD! ${p.name} → ${t.name} for ₹${s.highest.amount} Cr`);
   } else s.logs.push(`UNSOLD: ${p.name} (no bids)`);
-  s.index++;
-  if(s.index<s.players.length){
-    const n=s.players[s.index]; s.highest={bidder:null,amount:n.base}; s.roundEndsAt=Date.now()+30000;
-    s.logs.push(`Pool: ${n.pool} | Next: ${n.name} enters at ₹${n.base} Cr`);
-  }
+  s.auctionClosed=true;
+  s.logs.push('Auctioneer: The bidding is closed. Please proceed to the next player.');
 }
 
 app.post('/api/auction/start', async (req,res)=>{
@@ -1194,14 +1192,14 @@ app.post('/api/auction/start', async (req,res)=>{
     const players = await generateAuctionPlayers();
     const id=auctionId();
     const teams={player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}};
-    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},roundEndsAt:Date.now()+30000,logs:[`Pool: ${players[0].pool} | Auction starts: ${players[0].name} at ₹${players[0].base} Cr`]};
+    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,lastAuctioneerCall:'',roundEndsAt:Date.now()+30000,logs:[`Pool: ${players[0].pool} | Auction starts: ${players[0].name} at ₹${players[0].base} Cr`]};
     auctionSessions.set(id,s); res.json(publicAuction(s));
   } catch(e){res.status(500).json({ok:false,error:e.message||'Unable to start auction'});}
 });
 app.post('/api/auction/bid',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId);
   if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'});
-  if(Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'This player auction has closed.'});
+  if(s.auctionClosed || Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'This player auction has closed.'});
   const p=s.players[s.index], next=Math.round((s.highest.amount+0.5)*2)/2;
   if(s.teams.player.purse<next)return res.status(400).json({ok:false,error:'Insufficient purse'});
   s.highest={bidder:'player',amount:next}; s.logs.push(`${s.teams.player.name} bids ₹${next} Cr for ${p.name}`); runAgents(s);
@@ -1209,10 +1207,25 @@ app.post('/api/auction/bid',(req,res)=>{
 });
 app.post('/api/auction/tick',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
-  if(s.index<s.players.length){
-    if(Date.now()>=s.roundEndsAt) settleCurrentPlayer(s);
-    else runAgents(s);
+  if(s.index<s.players.length && !s.auctionClosed){
+    const remaining=Math.ceil((s.roundEndsAt-Date.now())/1000);
+    if(remaining<=0) settleCurrentPlayer(s);
+    else {
+      runAgents(s);
+      if(remaining<=3 && s.lastAuctioneerCall!==String(remaining)){
+        s.lastAuctioneerCall=String(remaining);
+        const msg=remaining===3?'Auctioneer: Three seconds remaining! Any more bids?':remaining===2?'Auctioneer: Going once... any final bid?':'Auctioneer: Last second! Going twice...';
+        s.logs.push(msg);
+      }
+    }
   }
+  res.json(publicAuction(s));
+});
+app.post('/api/auction/next',(req,res)=>{
+  const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
+  if(!s.auctionClosed)return res.status(400).json({ok:false,error:'Current auction is still live'});
+  s.index++;
+  if(s.index<s.players.length){ const n=s.players[s.index]; s.highest={bidder:null,amount:n.base}; s.auctionClosed=false; s.lastAuctioneerCall=''; s.roundEndsAt=Date.now()+30000; s.logs.push(`Auctioneer: Next player, ${n.name}, enters from the ${n.pool} pool at ₹${n.base} Cr.`); }
   res.json(publicAuction(s));
 });
 app.post('/api/auction/results',(req,res)=>{
