@@ -798,3 +798,95 @@ function html(e,m){if(e)e.innerHTML=m}
     }
   });
 })();
+
+/* ========================
+   5-Round Mystery Solver
+======================== */
+(function(){
+  const startBtn = document.getElementById('mystery-start');
+  if(!startBtn) return;
+
+  const startWrap = document.getElementById('mystery-start-wrap');
+  const area = document.getElementById('mystery-area');
+  const roundEl = document.getElementById('mystery-round');
+  const timerEl = document.getElementById('mystery-timer');
+  const scoreEl = document.getElementById('mystery-score');
+  const titleEl = document.getElementById('mystery-title');
+  const textEl = document.getElementById('mystery-text');
+  const cluesEl = document.getElementById('mystery-clues');
+  const form = document.getElementById('mystery-answer-form');
+  const answerEl = document.getElementById('mystery-answer');
+  const submitBtn = document.getElementById('mystery-submit');
+  const waitEl = document.getElementById('mystery-wait');
+  const resultEl = document.getElementById('mystery-result');
+
+  let token = null, timer = null, timeLeft = 30, locked = false;
+  let score = {player:0, logic:0, lateral:0};
+
+  const clearTimer = () => { if(timer){ clearInterval(timer); timer=null; } };
+  const updateScore = () => scoreEl.textContent = `You ${score.player} · Logic AI ${score.logic} · Lateral AI ${score.lateral}`;
+
+  function renderRound(m){
+    area.classList.remove('hidden');
+    roundEl.textContent = `Round ${m.round} of ${m.total}`;
+    timerEl.textContent = '⏱ 30s';
+    titleEl.textContent = m.title || 'Mystery';
+    textEl.textContent = m.mystery || '';
+    cluesEl.innerHTML = '';
+    (m.clues || []).forEach((clue,i)=>{
+      const d=document.createElement('div'); d.className='pill'; d.textContent=`🔎 Clue ${i+1}: ${clue}`; cluesEl.appendChild(d);
+    });
+    answerEl.value=''; answerEl.disabled=false; submitBtn.disabled=true; locked=false;
+    resultEl.style.display='none'; resultEl.textContent='';
+    waitEl.textContent='⏳ You can prepare your answer now. Submission unlocks when the 30-second timer ends.';
+    clearTimer(); timeLeft=30;
+    timer=setInterval(()=>{
+      timeLeft--; timerEl.textContent=`⏱ ${Math.max(0,timeLeft)}s`;
+      if(timeLeft<=0){
+        clearTimer(); submitBtn.disabled=false;
+        waitEl.textContent='⏰ Time is up! Submit your solution to reveal all three answers.';
+        answerEl.focus();
+      }
+    },1000);
+  }
+
+  startBtn.addEventListener('click', async ()=>{
+    startBtn.disabled=true; startBtn.textContent='Starting...';
+    try{
+      const res=await fetch('/api/mystery/start',{method:'POST'});
+      const json=await res.json();
+      if(!res.ok||!json.ok) throw new Error(json.error||`Unable to start game (HTTP ${res.status}).`);
+      token=json.token; score={player:0,logic:0,lateral:0}; updateScore(); startWrap.classList.add('hidden'); renderRound(json);
+    }catch(err){
+      startBtn.disabled=false; startBtn.textContent='Start Mystery Game';
+      startWrap.insertAdjacentHTML('beforeend',`<div class="pill" style="margin-top:10px;">❌ ${String(err.message||'Unable to start game.')}</div>`);
+    }
+  });
+
+  form.addEventListener('submit', async e=>{
+    e.preventDefault();
+    if(locked||!token||timeLeft>0) return;
+    locked=true; submitBtn.disabled=true; answerEl.disabled=true; clearTimer();
+    waitEl.textContent='🤖 Logic AI and Lateral AI are solving independently...';
+    try{
+      const res=await fetch('/api/mystery/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,answer:answerEl.value.trim()})});
+      const json=await res.json();
+      if(!res.ok||!json.ok) throw new Error(json.error||`Unable to resolve round (HTTP ${res.status}).`);
+      score=json.score; updateScore();
+      const r=json.result;
+      resultEl.style.display='block';
+      resultEl.textContent = `YOUR ANSWER: ${r.player.answer}\n${r.player.correct?'✅ CORRECT':'❌ WRONG'} — ${r.player.reason}\n\nLOGIC AI: ${r.logic.answer}\n${r.logic.correct?'✅ CORRECT':'❌ WRONG'} — ${r.logic.reason}\n\nLATERAL AI: ${r.lateral.answer}\n${r.lateral.correct?'✅ CORRECT':'❌ WRONG'} — ${r.lateral.reason}\n\nCANONICAL SOLUTION: ${r.canonicalAnswer}`;
+      if(json.done){
+        const winnerLabel={player:'YOU',logic:'LOGIC AI',lateral:'LATERAL AI',tie:'TIE'}[json.winner]||json.winner;
+        waitEl.textContent=`🏆 Game complete! Winner: ${winnerLabel}`;
+        submitBtn.style.display='none';
+        return;
+      }
+      waitEl.textContent='Round solved. Get ready for the next mystery...';
+      setTimeout(()=>renderRound(json.next),1600);
+    }catch(err){
+      locked=false; answerEl.disabled=false; submitBtn.disabled=false;
+      waitEl.textContent='❌ '+String(err.message||'Unable to resolve the round.');
+    }
+  });
+})();
