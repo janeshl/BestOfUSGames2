@@ -1278,16 +1278,22 @@ function scheduleNextAgentDecision(s, minMs=AUCTION_AI_MIN_DELAY_MS){
   const jitter=Math.floor(Math.random()*(AUCTION_AI_MAX_DELAY_MS-minMs+1));
   s.nextAgentDecisionAt=Date.now()+minMs+jitter;
 }
-function placeBid(s,bidder,amount){
+function placeBid(s,bidder,amount,enforceReserve=true){
   const t=s.teams[bidder],p=s.players[s.index];
-  if(!t||!p||s.auctionClosed||s.finalChance||t.squad.length>=AUCTION_MAX_SQUAD||t.purse<amount)return false;
+  const fromFinalCall=!!s.finalChance;
+  if(!t||!p||s.auctionClosed||t.squad.length>=AUCTION_MAX_SQUAD||t.purse<amount)return false;
+  // During Final Call the player is allowed one last bid even if the AI-style
+  // reserve calculation would otherwise reject it. The human only needs enough
+  // purse for the actual bid; AI bids still respect their strategic reserve.
   if(amount<=s.highest.amount)return false;
   const reserve=reserveForFive(t,s,p);
-  if(!Number.isFinite(reserve)||t.purse-amount<reserve)return false;
+  if(enforceReserve && (!Number.isFinite(reserve)||t.purse-amount<reserve))return false;
   s.highest={bidder,amount};
   s.waitingForClose=true;
   s.closeReady=false;
   s.finalChance=false;
+  if(bidder==='player' && fromFinalCall) s.playerFinalBidMade=true;
+  else if(bidder!=='player') s.playerFinalBidMade=false;
   s.closeAt=Date.now()+AUCTION_CLOSE_WAIT_MS;
   s.lastBidAt=Date.now();
   s.teamSignals=s.teamSignals||{};
@@ -1331,7 +1337,7 @@ function runAgents(s){
 }
 
 function settleCurrentPlayer(s){
-  if(s.auctionClosed || !s.finalChance)return;
+  if(s.auctionClosed)return;
   const p=s.players[s.index]; if(!p)return;
   if(s.highest.bidder){
     const t=s.teams[s.highest.bidder];
@@ -1386,7 +1392,7 @@ app.post('/api/auction/start', async (req,res)=>{
       agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},
       agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}
     };
-    const s={id,players,index:0,phase:'main',unsoldPlayers:[],done:false,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,waitingForClose:false,finalChance:false,closeAt:null,lastBidAt:0,lastAgentDecisionAt:0,nextAgentDecisionAt:Date.now()+1800,agentInterestLogged:{},teamSignals:{},logs:[`Pool: ${players[0].pool} | Auctioneer opens ${players[0].name} at ₹${players[0].base} Cr. No countdown — bid, skip or wait for the AI agents.`]};
+    const s={id,players,index:0,phase:'main',unsoldPlayers:[],done:false,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,waitingForClose:false,finalChance:false,closeAt:null,lastBidAt:0,lastAgentDecisionAt:0,nextAgentDecisionAt:Date.now()+1800,agentInterestLogged:{},teamSignals:{},playerFinalBidMade:false,logs:[`Pool: ${players[0].pool} | Auctioneer opens ${players[0].name} at ₹${players[0].base} Cr. No countdown — bid, skip or wait for the AI agents.`]};
     auctionSessions.set(id,s);res.json(publicAuction(s));
   }catch(e){res.status(500).json({ok:false,error:e.message||'Unable to start auction'});}
 });
@@ -1399,10 +1405,10 @@ app.post('/api/auction/bid',(req,res)=>{
   if(team.squad.length>=AUCTION_MAX_SQUAD)return res.status(400).json({ok:false,error:`Your Team squad is complete at ${AUCTION_MAX_SQUAD} players. Bidding is disabled for your team.`});
   if(team.squad.length>=AUCTION_MAX_SQUAD)return res.status(400).json({ok:false,error:`Your Team already has the maximum ${AUCTION_MAX_SQUAD} players.`});
   if(team.purse<next)return res.status(400).json({ok:false,error:'Not enough purse for this bid.'});
-  // Player bids are accepted whenever the purse and increment are valid. The reserve rule is used by AI strategy, not to block the human player.
-  s.finalChance=false;
-  if(!placeBid(s,'player',next))return res.status(409).json({ok:false,error:'That bid is no longer valid. Please try again.'});
-  s.logs.push(`Auctioneer: Bid accepted from ${team.name}. Waiting 3 seconds for any higher bid.`);
+  // Human bids are accepted whenever the actual purse/increment is valid,
+  // including during Final Call. Human bidding does not use the AI reserve rule.
+  if(!placeBid(s,'player',next,false))return res.status(409).json({ok:false,error:'That bid is no longer valid. Please try again.'});
+  s.logs.push(`Auctioneer: Bid accepted from ${team.name}. Waiting 5 seconds for any higher AI bid.`);
   res.json(publicAuction(s));
 });
 
@@ -1411,10 +1417,7 @@ app.post('/api/auction/skip',(req,res)=>{
   if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'});
   if(s.auctionClosed)return res.status(400).json({ok:false,error:'This player is already closed.'});
   if(s.finalChance){
-    s.finalChance=false;
-    s.waitingForClose=false;
-    s.logs.push(`Your Team: confirmed NO INTEREST. Auctioneer closes the bidding for ${s.players[s.index].name}.`);
-    s.finalChance=true;
+    s.logs.push(`Your Team: NO INTEREST after Final Call. Auctioneer closes the bidding for ${s.players[s.index].name}.`);
     settleCurrentPlayer(s);
     return res.json(publicAuction(s));
   }
@@ -1440,9 +1443,20 @@ app.post('/api/auction/tick',(req,res)=>{
     if(!s.finalChance) runAgents(s);
     if(s.waitingForClose && now>=s.closeAt){
       s.waitingForClose=false;
-      s.closeReady=true;
       const p=s.players[s.index];
-      s.logs.push(`Auctioneer: 5-second response window ended for ${p.name}. No higher bid was received. Auctioneer may now close the auction.`);
+      if(s.playerFinalBidMade){
+        // The player already used the Final Call. After another 5 seconds with
+        // no AI raise, the auctioneer may close and sell to the player team.
+        s.closeReady=true;
+        s.finalChance=false;
+        s.logs.push(`Auctioneer: 5-second response window ended for ${p.name}. No higher AI bid was received. Auctioneer may now close and sell to ${s.teams[s.highest.bidder]?.name||'the highest bidder'}.`);
+      } else {
+        // No final-call player bid was made yet: give the player the last chance
+        // to bid or explicitly choose No Interest.
+        s.closeReady=false;
+        s.finalChance=true;
+        s.logs.push(`Auctioneer: Final Call for ${p.name}. Player Team may BID once more or choose NO INTEREST.`);
+      }
     }
   }
   res.json(publicAuction(s));
@@ -1454,7 +1468,7 @@ app.post('/api/auction/close',(req,res)=>{
   if(s.auctionClosed)return res.json(publicAuction(s));
   if(!s.closeReady)return res.status(409).json({ok:false,error:'The 5-second response window is still active.'});
   const p=s.players[s.index];
-  s.finalChance=true;
+  s.finalChance=false;
   s.closeReady=false;
   s.waitingForClose=false;
   s.logs.push(`Auctioneer: CLOSED — ${p.name} goes to ${s.highest.bidder?s.teams[s.highest.bidder].name:'UNSOLD'} at ${s.highest.bidder?`₹${s.highest.amount} Cr`:'no bid'}.`);
@@ -1473,7 +1487,7 @@ app.post('/api/auction/next',(req,res)=>{
     s.players=(s.unsoldPlayers||[]).map(x=>({...x}));
     s.index=0;
     s.unsoldPlayers=[];
-    s.auctionClosed=false;s.waitingForClose=false;s.finalChance=false;s.closeReady=false;s.closeAt=null;s.lastBidAt=0;s.lastAgentDecisionAt=0;s.nextAgentDecisionAt=Date.now()+1800;s.agentInterestLogged={};s.playerSkipped=false;
+    s.auctionClosed=false;s.waitingForClose=false;s.finalChance=false;s.closeReady=false;s.closeAt=null;s.lastBidAt=0;s.lastAgentDecisionAt=0;s.nextAgentDecisionAt=Date.now()+1800;s.agentInterestLogged={};s.playerSkipped=false;s.playerFinalBidMade=false;
     if(s.players.length){
       const n=s.players[0];
       s.highest={bidder:null,amount:n.base};
@@ -1485,7 +1499,7 @@ app.post('/api/auction/next',(req,res)=>{
     }
   } else if(s.index<s.players.length){
     const n=s.players[s.index];
-    s.highest={bidder:null,amount:n.base};s.auctionClosed=false;s.waitingForClose=false;s.finalChance=false;s.closeReady=false;s.closeAt=null;s.lastBidAt=0;s.lastAgentDecisionAt=0;s.nextAgentDecisionAt=Date.now()+1800;s.agentInterestLogged={};s.playerSkipped=false;
+    s.highest={bidder:null,amount:n.base};s.auctionClosed=false;s.waitingForClose=false;s.finalChance=false;s.closeReady=false;s.closeAt=null;s.lastBidAt=0;s.lastAgentDecisionAt=0;s.nextAgentDecisionAt=Date.now()+1800;s.agentInterestLogged={};s.playerSkipped=false;s.playerFinalBidMade=false;
     s.logs.push(`Auctioneer: Next ${s.phase==='unsold'?'unsold-pool player':'player'} — ${n.name}, ${n.pool}, base ₹${n.base} Cr.`);
   } else if(s.phase==='unsold'){
     s.done=true;
