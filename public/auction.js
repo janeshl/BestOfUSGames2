@@ -1,10 +1,29 @@
-let sid=null,state=null,timer=null;const app=document.getElementById('auctionApp');
-async function api(url,data={}){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return r.json()}
+let sid=null,state=null,timer=null,loading=false;
+const app=document.getElementById('auctionApp');
+async function api(url,data={}){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(!r.ok||j.ok===false)throw new Error(j.error||'Request failed');return j}
 function money(n){return `₹${Number(n).toFixed(1)} Cr`}
-function render(){if(!state)return;const p=state.current;const teams=Object.values(state.teams).map(t=>`<div class="card"><h3>${t.name}</h3><b>Purse: ${money(t.purse)}</b><p>Players: ${t.squad.length}</p><small>${t.squad.map(x=>x.name).join(', ')||'No players yet'}</small></div>`).join(''); if(state.done){clearInterval(timer);app.innerHTML=`<div class="card"><h2>Auction Complete</h2><button class="btn" onclick="results()"><span>Evaluate Teams</span></button><div id="results"></div></div>`;return} const left=Math.max(0,Math.ceil((state.roundEndsAt-Date.now())/1000));app.innerHTML=`<div class="auction-main"><div class="card"><h3>${p.pool}</h3><h1>${p.name}</h1><p>⭐ Rating ${p.rating} | 🏷 ${p.tag}</p><p>Base Price: ${money(p.base)}</p><h2>Current Bid: ${money(state.logs.length&&state.logs[state.logs.length-1].includes('bids')? state.logs[state.logs.length-1].match(/₹([\d.]+)/)?.[1]||p.base : p.base)}</h2><h1>⏱ ${left}s</h1><button class="btn" onclick="bid()"><span>Bid + ₹0.5 Cr</span></button> <button class="btn" onclick="closePlayer()"><span>Close Auction</span></button><p><b>Player ${state.index+1} / ${state.total}</b></p></div><div class="card"><h3>Live Auction Log</h3>${state.logs.slice().reverse().map(x=>`<p>${x}</p>`).join('')}</div></div><div class="auction-teams">${teams}</div>`}
-async function start(){state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();timer=setInterval(tick,1000)}
-async function tick(){if(!sid)return;state=await api('/api/auction/tick',{sessionId:sid});if(Date.now()>=state.roundEndsAt&&!state.done)await closePlayer();else render()}
-async function bid(){state=await api('/api/auction/bid',{sessionId:sid});if(!state.ok)alert(state.error);else render()}
-async function closePlayer(){state=await api('/api/auction/close',{sessionId:sid});render()}
-async function results(){const r=await api('/api/auction/results',{sessionId:sid});document.getElementById('results').innerHTML=`<h2>🏆 Winner: ${r.winner.name}</h2>`+r.ranked.map((x,i)=>`<div class="card"><h3>#${i+1} ${x.name} — ${x.score}/100</h3><p>Spent: ${money(x.spent)} | Remaining: ${money(x.remaining)}</p><p>${x.squad.map(p=>p.name).join(', ')}</p></div>`).join('')}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function render(){
+ if(!state)return;
+ if(state.done){clearInterval(timer);app.innerHTML=`<div class="auction-results card"><h2>🔨 All 13 Players Auctioned</h2><p>All pools are complete. Evaluate the three squads.</p><button class="btn" onclick="results()"><span>Evaluate Teams</span></button><div id="results"></div></div>`;return}
+ const p=state.current,left=Math.max(0,Math.ceil((state.roundEndsAt-Date.now())/1000));
+ const teams=Object.values(state.teams).map(t=>`<div class="auction-team-card"><strong>${esc(t.name)}</strong><span>Purse: ${money(t.purse)}</span><small>${t.squad.length} players</small><div class="auction-squad-mini">${t.squad.map(x=>esc(x.name)).join(', ')||'No purchases yet'}</div></div>`).join('');
+ app.innerHTML=`
+ <div class="auction-teams-top">${teams}</div>
+ <div class="auction-pool-banner">POOL: ${esc(state.poolName)} <span>Player ${state.index+1}/${state.total}</span></div>
+ <div class="auction-main compact-auction">
+   <div class="auction-player-card card">
+    <div class="auction-player-head"><h2>${esc(p.name)}</h2><span class="auction-tag">${esc(p.tag)}</span></div>
+    <div class="auction-stats"><span>⭐ ${p.rating}/100</span><span>Base ${money(p.base)}</span><span>🔨 Bid ${money(state.currentBid)}</span></div>
+    <div class="auction-timer">⏱ <b>${left}s</b></div>
+    <p class="auction-leader">${state.currentBidder?`Highest bidder: <b>${esc(state.teams[state.currentBidder].name)}</b>`:'No bids yet'}</p>
+    <button class="btn" ${left<=0?'disabled':''} onclick="bid()"><span>Bid + ₹0.5 Cr</span></button>
+   </div>
+   <div class="auction-log card"><h3>Live Auction Updates</h3><div class="auction-log-scroll">${state.logs.slice().reverse().map(x=>`<p>${esc(x)}</p>`).join('')}</div></div>
+ </div>`;
+}
+async function start(){try{loading=true;app.innerHTML='<div class="card"><h2>🏏 Preparing Auction</h2><p>AI is selecting a fresh pool of real cricketers...</p></div>';state=await api('/api/auction/start',{teamName:'Player Team'});sid=state.sessionId;render();timer=setInterval(tick,1000)}catch(e){app.innerHTML=`<div class="card"><h2>Unable to start auction</h2><p>${esc(e.message)}</p><button class="btn" onclick="start()"><span>Try Again</span></button></div>`}finally{loading=false}}
+async function tick(){if(!sid||loading)return;try{state=await api('/api/auction/tick',{sessionId:sid});render()}catch(e){console.error(e)}}
+async function bid(){try{state=await api('/api/auction/bid',{sessionId:sid});render()}catch(e){alert(e.message)}}
+async function results(){try{const r=await api('/api/auction/results',{sessionId:sid});document.getElementById('results').innerHTML=`<h2>🏆 Winner: ${esc(r.winner.name)}</h2>`+r.ranked.map((x,i)=>`<div class="card"><h3>#${i+1} ${esc(x.name)} — ${x.score}/100</h3><p>Spent: ${money(x.spent)} | Remaining: ${money(x.remaining)}</p><p>${x.squad.map(p=>esc(p.name)).join(', ')||'No players purchased'}</p></div>`).join('')}catch(e){alert(e.message)}}
 start();
