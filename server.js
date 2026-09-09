@@ -1109,15 +1109,17 @@ app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${POR
 ======================== */
 const AUCTION_POOL_ORDER = ["Batsmen", "Bowlers", "All Rounders", "Wicket Keepers"];
 const AUCTION_POOL_COUNTS = {"Batsmen":6,"Bowlers":6,"All Rounders":5,"Wicket Keepers":3};
-const AUCTION_DURATION_MS = 10000;
+const AUCTION_DURATION_MS = 15000;
+const AUCTION_BID_DELAY_MS = 2000;
 const AUCTION_MAX_SQUAD = 6;
 const AUCTION_MIN_SQUAD = 5;
 const AUCTION_REQUIRED_ROLES = ["Batsmen","Bowlers","Wicket Keepers"];
+const AUCTION_START_PURSE = 100;
+const AUCTION_MIN_BUY_PRICE = 2;
 const auctionSessions = new Map();
 const auctionId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 10);
 
 function auctionFallbackPlayers() {
-  // Exactly 20 players: 6 batsmen, 6 bowlers, 5 all-rounders, 3 wicket keepers.
   return [
     {name:"Suryakumar Yadav",pool:"Batsmen",base:8,rating:92,tag:"All-Format Aggressor"},
     {name:"Ruturaj Gaikwad",pool:"Batsmen",base:7,rating:88,tag:"Aggressive Strokeplayer"},
@@ -1143,13 +1145,13 @@ function auctionFallbackPlayers() {
 }
 
 const auctionPlayerPoolsPrompt = () => [
-  { role: "system", content: `You are creating a fresh IPL-style cricket auction player list using REAL, well-known professional cricketers. Return STRICT JSON ONLY: {"players":[...]}. Exactly 20 UNIQUE real cricketers, in this exact distribution: 6 "Batsmen", 6 "Bowlers", 5 "All Rounders", 3 "Wicket Keepers". Each object: {"name":"real full name","pool":"Batsmen|Bowlers|All Rounders|Wicket Keepers","base":number,"rating":number,"tag":"string"}. Base price must be between 2 and 10 in 0.5 increments. Rating must be 78-97. Use role-appropriate tags. Prefer active or recent internationally recognized cricketers and never duplicate a person. Do not invent fictional names. No markdown.` },
+  { role: "system", content: `You are creating a fresh IPL-style cricket auction player list using REAL, well-known professional cricketers. Return STRICT JSON ONLY: {"players":[...]}. Exactly 20 UNIQUE real cricketers, in this exact distribution: 6 "Batsmen", 6 "Bowlers", 5 "All Rounders", 3 "Wicket Keepers". Each object: {"name":"real full name","pool":"Batsmen|Bowlers|All Rounders|Wicket Keepers","base":number,"rating":number,"tag":"string"}. Base price 2-10 in 0.5 increments. Rating 78-97. Make ratings and prices varied enough for strategic bidding. Do not invent fictional names. No markdown.` },
   { role: "user", content: "Create a fresh balanced 20-player auction pool now. JSON only." }
 ];
 
 async function generateAuctionPlayers(){
   try {
-    const raw = await chatCompletion(auctionPlayerPoolsPrompt(), 0.8, 2200, {json:true, timeoutMs:30000});
+    const raw = await chatCompletion(auctionPlayerPoolsPrompt(), 0.75, 2200, {json:true, timeoutMs:30000});
     const parsed = parseModelJson(raw);
     const players = Array.isArray(parsed?.players) ? parsed.players : [];
     const counts = {...AUCTION_POOL_COUNTS};
@@ -1159,8 +1161,7 @@ async function generateAuctionPlayers(){
       const name = String(x?.name||"").trim();
       const pool = String(x?.pool||"").trim();
       if (!name || !(pool in counts) || seen.has(name.toLowerCase()) || counts[pool] <= 0) continue;
-      seen.add(name.toLowerCase());
-      counts[pool]--;
+      seen.add(name.toLowerCase()); counts[pool]--;
       const baseRaw = Number(x.base);
       const base = Number.isFinite(baseRaw) ? Math.min(10,Math.max(2,Math.round(baseRaw*2)/2)) : 5;
       const rating = Math.min(97,Math.max(78,Math.round(Number(x.rating)||85)));
@@ -1169,22 +1170,27 @@ async function generateAuctionPlayers(){
       cleaned.push({id:`${pool.replace(/\s+/g,'-')}-${cleaned.length+1}`,name,pool,base,rating,tag});
     }
     if (Object.values(counts).every(v=>v===0) && cleaned.length===20) {
-      const ordered=[];
-      for (const pool of AUCTION_POOL_ORDER) ordered.push(...cleaned.filter(p=>p.pool===pool));
-      return ordered;
+      return AUCTION_POOL_ORDER.flatMap(pool=>cleaned.filter(p=>p.pool===pool));
     }
   } catch (e) { console.error("Auction AI pool generation failed:", e.message); }
   return auctionFallbackPlayers().map((x,i)=>({...x,id:`fallback-${i+1}`}));
 }
 
+function roundHalf(n){ return Math.round(n*2)/2; }
+function nextBidAmount(s){
+  const pendingMax = (s.pendingBids||[]).reduce((m,b)=>Math.max(m,b.amount), s.highest.amount);
+  return roundHalf(pendingMax+0.5);
+}
 function publicAuction(s){
   const p=s.players[s.index];
+  const pending=s.pendingBids||[];
   return {
     ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,
     roundEndsAt:s.roundEndsAt,auctionClosed:!!s.auctionClosed,
-    teams:s.teams,logs:s.logs.slice(-12),currentBid:s.highest.amount,
-    currentBidder:s.highest.bidder,done:s.index>=s.players.length,poolName:p?.pool||null,
-    poolCounts:AUCTION_POOL_COUNTS,auctionDurationSeconds:AUCTION_DURATION_MS/1000,
+    teams:s.teams,logs:s.logs.slice(-14),currentBid:s.highest.amount,
+    currentBidder:s.highest.bidder,pendingBid:pending[0]?{bidder:pending[0].bidder,amount:pending[0].amount,acceptAt:pending[0].acceptAt}:null,
+    done:s.index>=s.players.length,poolName:p?.pool||null,
+    poolCounts:AUCTION_POOL_COUNTS,auctionDurationSeconds:AUCTION_DURATION_MS/1000,bidAcceptanceDelaySeconds:AUCTION_BID_DELAY_MS/1000,
     rules:{minSquad:AUCTION_MIN_SQUAD,maxSquad:AUCTION_MAX_SQUAD,requiredRoles:AUCTION_REQUIRED_ROLES}
   };
 }
@@ -1192,54 +1198,126 @@ function publicAuction(s){
 function teamRoleCounts(team){
   return AUCTION_POOL_ORDER.reduce((acc,role)=>{acc[role]=team.squad.filter(x=>x.pool===role).length;return acc;},{});
 }
-function teamNeeds(team,p){
+function missingCoreRoles(team){
   const roles=teamRoleCounts(team);
-  if (team.squad.length>=AUCTION_MAX_SQUAD) return false;
-  if (p.pool==="Wicket Keepers" && roles["Wicket Keepers"]===0) return true;
-  if (p.pool==="Batsmen" && roles.Batsmen===0) return true;
-  if (p.pool==="Bowlers" && roles.Bowlers===0) return true;
-  // Before reaching five players, favour missing core roles and then squad variety.
-  if (team.squad.length<AUCTION_MIN_SQUAD && roles[p.pool]===0) return true;
-  return roles[p.pool]===0;
+  return AUCTION_REQUIRED_ROLES.filter(r=>roles[r]===0);
 }
-function aiMax(team,p){
-  if(team.squad.length>=AUCTION_MAX_SQUAD)return 0;
-  const need=teamNeeds(team,p)?1.18:1;
-  const roleCount=team.squad.filter(x=>x.pool===p.pool).length;
-  const scarcity=(roleCount===0?1.05:1);
-  const minBuyPressure=team.squad.length<AUCTION_MIN_SQUAD?1.06:1;
-  const style=team.strategy==='aggressive'?1.12:team.strategy==='balanced'?1.05:1.0;
-  const maxSpend=Math.round((p.base+(p.rating-75)*0.22)*need*scarcity*minBuyPressure*style*2)/2;
-  // AI keeps enough purse for minimum-price purchases needed to reach 5 players.
-  const afterThis=Math.max(0,AUCTION_MIN_SQUAD-(team.squad.length+1));
-  const reserve=afterThis*2;
-  return Math.min(Math.max(0,team.purse-reserve), maxSpend);
+function remainingBuyReserve(team, additional=0){
+  const needed=Math.max(0,AUCTION_MIN_SQUAD-(team.squad.length+additional));
+  return needed*AUCTION_MIN_BUY_PRICE;
+}
+function teamNeeds(team,p){
+  if (team.squad.length>=AUCTION_MAX_SQUAD) return false;
+  const missing=missingCoreRoles(team);
+  if (missing.includes(p.pool)) return true;
+  const roles=teamRoleCounts(team);
+  return roles[p.pool]===0 && team.squad.length<AUCTION_MIN_SQUAD;
+}
+
+function playerValue(p){
+  const ratingValue=(p.rating-75)*0.45;
+  const premium=p.rating>=93?2.5:p.rating>=90?1.5:0;
+  const baseEfficiency=p.base<=6?1.5:p.base<=7.5?0.75:0;
+  const roleScarcity=p.pool==='Wicket Keepers'?3.2:(p.pool==='Bowlers'?1.2:0);
+  return p.base+ratingValue+premium+baseEfficiency+roleScarcity;
+}
+function aiState(team,s,p){
+  const roles=teamRoleCounts(team);
+  const missing=missingCoreRoles(team);
+  const squadSize=team.squad.length;
+  const playersLeft=s.players.slice(s.index+1);
+  const futureCore={
+    'Batsmen':playersLeft.filter(x=>x.pool==='Batsmen').length,
+    'Bowlers':playersLeft.filter(x=>x.pool==='Bowlers').length,
+    'Wicket Keepers':playersLeft.filter(x=>x.pool==='Wicket Keepers').length
+  };
+  const futureRoleChance=futureCore[p.pool]||0;
+  const roleUrgency=missing.includes(p.pool)?(futureRoleChance<=1?2.0:1.35):1;
+  const scarceBonus=p.pool==='Wicket Keepers' ? 1.35 : (p.pool==='Bowlers' ? 1.08 : 1);
+  const quality=(p.rating-78)/19;
+  const value=Math.max(0,playerValue(p));
+  const budgetFactor=Math.min(1.18,Math.max(0.72,team.purse/65));
+  const reserve=remainingBuyReserve(team,1);
+  const safePurse=Math.max(0,team.purse-reserve);
+  const maxByQuality=value*(0.72+quality*0.32)*roleUrgency*scarceBonus*budgetFactor;
+  const mustBuy= squadSize<AUCTION_MIN_SQUAD && (missing.includes(p.pool) || futureRoleChance<=1);
+  const max=roundHalf(Math.min(safePurse,maxByQuality + (mustBuy?1.5:0)));
+  return {roles,missing,futureCore,futureRoleChance,roleUrgency,quality,value,budgetFactor,reserve,max,mustBuy};
+}
+function aiShouldBid(team,s,p,currentAmount){
+  if(team.squad.length>=AUCTION_MAX_SQUAD || team.purse<0.5) return {bid:false,max:0};
+  const st=aiState(team,s,p);
+  const next=roundHalf(currentAmount+0.5);
+  if(next>st.max || next>team.purse-st.reserve) return {bid:false,max:st.max};
+
+  // Smart AI behavior: protect mandatory roles, value ratings, track scarcity,
+  // avoid bidding wars, and keep a reserve for the minimum five-player squad.
+  const overpayRatio=next/Math.max(1,st.value);
+  if(overpayRatio>1.16 && !st.mustBuy) return {bid:false,max:st.max};
+  const qualityPressure=st.quality>0.72?0.15:st.quality>0.5?0.04:-0.05;
+  const urgencyPressure=st.missing.includes(p.pool)?0.28:0;
+  const scarcityPressure=st.futureRoleChance<=1?0.22:st.futureRoleChance===2?0.08:0;
+  const budgetPressure=team.purse<25?-0.18:team.purse>65?0.05:0;
+  const personality=team.strategy==='aggressive'?0.08:team.strategy==='balanced'?0.02:-0.04;
+  const score=0.42+qualityPressure+urgencyPressure+scarcityPressure+budgetPressure+personality-(overpayRatio>1.0?0.16:0);
+  return {bid:st.mustBuy || Math.random()<Math.max(0.08,Math.min(0.9,score)),max:st.max,state:st};
+}
+function queueBid(s,bidder,amount){
+  s.pendingBids=s.pendingBids||[];
+  if(s.pendingBids.some(b=>b.bidder===bidder)) return false;
+  s.pendingBids.push({bidder,amount,requestedAt:Date.now(),acceptAt:Date.now()+AUCTION_BID_DELAY_MS});
+  s.pendingBids.sort((a,b)=>a.requestedAt-b.requestedAt);
+  return true;
+}
+function acceptPendingBids(s){
+  if(!s.pendingBids?.length)return;
+  const now=Date.now();
+  const due=s.pendingBids.filter(b=>b.acceptAt<=now);
+  s.pendingBids=s.pendingBids.filter(b=>b.acceptAt>now);
+  for(const b of due){
+    const t=s.teams[b.bidder];
+    if(!t || t.squad.length>=AUCTION_MAX_SQUAD || t.purse<b.amount) continue;
+    if(b.amount<=s.highest.amount) continue;
+    const p=s.players[s.index];
+    s.highest={bidder:b.bidder,amount:b.amount};
+    s.logs.push(`ACCEPTED: ${t.name} bids ₹${b.amount} Cr for ${p.name}`);
+  }
 }
 function runAgents(s){
-  const p=s.players[s.index]; if(!p || Date.now()>=s.roundEndsAt || s.auctionClosed)return;
+  const p=s.players[s.index]; if(!p || s.auctionClosed)return;
+  // Never create a new bid after the 15-second bidding cutoff.
+  if(Date.now()>=s.roundEndsAt)return;
   for(const key of ['agent1','agent2']){
     const t=s.teams[key];
-    if(t.squad.length>=AUCTION_MAX_SQUAD || s.highest.bidder===key || t.purse<0.5)continue;
-    const max=aiMax(t,p), next=Math.round((s.highest.amount+0.5)*2)/2;
-    const mustCover = teamNeeds(t,p) && t.squad.length<AUCTION_MIN_SQUAD;
-    const chance=t.strategy==='aggressive'?0.82:0.68;
-    if(next<=max && (mustCover || Math.random()<chance)){
-      s.highest={bidder:key,amount:next};
-      s.logs.push(`${t.name} bids ₹${next} Cr for ${p.name}`);
+    if(s.pendingBids?.some(b=>b.bidder===key))continue;
+    const current=Math.max(s.highest.amount,(s.pendingBids||[]).reduce((m,b)=>Math.max(m,b.amount),0));
+    const decision=aiShouldBid(t,s,p,current);
+    if(decision.bid){
+      const next=roundHalf(current+0.5);
+      if(next<=decision.max && next<=t.purse-remainingBuyReserve(t,1) && queueBid(s,key,next)){
+        s.logs.push(`${t.name} is considering ₹${next} Cr for ${p.name} (accepted in 2s)`);
+      }
     }
   }
 }
 function settleCurrentPlayer(s){
   if(s.auctionClosed)return;
+  acceptPendingBids(s);
   const p=s.players[s.index]; if(!p)return;
+  if(s.pendingBids?.length){
+    // A final bid may still be inside the 2-second acceptance window.
+    s.logs.push('Auctioneer: Final bids are being accepted...');
+    return;
+  }
   if(s.highest.bidder){
     const t=s.teams[s.highest.bidder];
-    t.purse=Math.round((t.purse-s.highest.amount)*100)/100;
-    t.squad.push({...p,price:s.highest.amount});
-    s.logs.push(`SOLD! ${p.name} → ${t.name} for ₹${s.highest.amount} Cr`);
+    if(t && t.purse>=s.highest.amount){
+      t.purse=roundHalf(t.purse-s.highest.amount);
+      t.squad.push({...p,price:s.highest.amount});
+      s.logs.push(`SOLD! ${p.name} → ${t.name} for ₹${s.highest.amount} Cr`);
+    }
   } else s.logs.push(`UNSOLD: ${p.name} (no bids)`);
   s.auctionClosed=true;
-  s.logs.push('Auctioneer: The bidding is closed. Please proceed to the next player.');
 }
 
 function evaluateTeam(t){
@@ -1248,103 +1326,96 @@ function evaluateTeam(t){
   const avgRating=squadSize?t.squad.reduce((a,p)=>a+p.rating,0)/squadSize:0;
   const roleTypes=AUCTION_POOL_ORDER.filter(r=>roles[r]>0).length;
   const coreRoles=AUCTION_REQUIRED_ROLES.filter(r=>roles[r]>0).length;
-  const spent=100-t.purse;
+  const spent=roundHalf(AUCTION_START_PURSE-t.purse);
   const avgPrice=squadSize?spent/squadSize:0;
-
-  // Final assessment is deliberately multi-factor and totals 100 points.
-  const ratingScore=Math.min(25,(avgRating/100)*25);                         // 25
-  const varietyScore=(roleTypes/4)*20;                                      // 20
-  const roleAvailabilityScore=(coreRoles/3)*20;                             // 20
-  const squadCompleteness=squadSize>=AUCTION_MIN_SQUAD?10:0;                // 10
-
-  // Purse-spending tactic: reward strong ratings at sensible prices and
-  // preserve enough purse to show discipline rather than simply overspending.
-  const valueRatio=squadSize?Math.min(1,avgRating/Math.max(1,avgPrice*12)):0;
-  const purseDiscipline=squadSize?Math.max(0,1-Math.abs(t.purse-40)/60):0;
-  const spendingScore=Math.round((valueRatio*0.65+purseDiscipline*0.35)*15); // 15
-
-  // Strategy/fit: reward squads that use different player profiles and roles
-  // rather than buying six players with the same auction profile.
+  const ratingScore=Math.min(25,(avgRating/100)*25);
+  const varietyScore=(roleTypes/4)*20;
+  const roleAvailabilityScore=(coreRoles/3)*20;
+  const squadCompleteness=squadSize>=AUCTION_MIN_SQUAD&&squadSize<=AUCTION_MAX_SQUAD?10:0;
+  const valuePoints=squadSize?Math.min(1,avgRating/Math.max(1,avgPrice*12)):0;
+  const purseDiscipline=squadSize?Math.max(0,1-Math.abs(t.purse-35)/65):0;
+  const spendingScore=Math.round((valuePoints*0.65+purseDiscipline*0.35)*15);
   const uniqueTags=squadSize?new Set(t.squad.map(p=>p.tag)).size:0;
-  const strategyFit=Math.min(10, (roleTypes/4)*5 + Math.min(1,uniqueTags/4)*5); // 10
-
-  const valid=squadSize>=AUCTION_MIN_SQUAD && squadSize<=AUCTION_MAX_SQUAD && coreRoles===3;
-  const score=Math.max(0,Math.min(100,Math.round(ratingScore+varietyScore+roleAvailabilityScore+squadCompleteness+spendingScore+strategyFit)));
+  const ratingSpread=squadSize?Math.min(1,Math.max(0,uniqueTags/4)):0;
+  const strategyFit=Math.min(10,(roleTypes/4)*5+ratingSpread*5);
+  const valid=squadSize>=AUCTION_MIN_SQUAD&&squadSize<=AUCTION_MAX_SQUAD&&coreRoles===3;
   const reasons=[];
   if(coreRoles<3)reasons.push(`missing ${AUCTION_REQUIRED_ROLES.filter(r=>!roles[r]).join(', ')}`);
   if(squadSize<AUCTION_MIN_SQUAD)reasons.push(`only ${squadSize} buys (minimum ${AUCTION_MIN_SQUAD})`);
   if(squadSize>AUCTION_MAX_SQUAD)reasons.push(`more than ${AUCTION_MAX_SQUAD} buys`);
-  return {
-    valid,score,avgRating:Math.round(avgRating*10)/10,
-    roleCounts:roles,roleTypes,spent:Math.round(spent*10)/10,
-    remaining:Math.round(t.purse*10)/10,avgPrice:Math.round(avgPrice*10)/10,
-    breakdown:{rating:Math.round(ratingScore),variety:Math.round(varietyScore),roleAvailability:Math.round(roleAvailabilityScore),squadCompleteness,spendingTactic:spendingScore,strategyFit},
-    reasons
-  };
+  const score=Math.max(0,Math.min(100,Math.round(ratingScore+varietyScore+roleAvailabilityScore+squadCompleteness+spendingScore+strategyFit)));
+  return {valid,score,avgRating:Math.round(avgRating*10)/10,roleCounts:roles,roleTypes,spent,remaining:roundHalf(t.purse),avgPrice:roundHalf(avgPrice),breakdown:{rating:Math.round(ratingScore),variety:Math.round(varietyScore),roleAvailability:Math.round(roleAvailabilityScore),squadCompleteness,spendingTactic:spendingScore,strategyFit},reasons};
 }
 
 app.post('/api/auction/start', async (req,res)=>{
   try {
-    const players = await generateAuctionPlayers();
+    const players=await generateAuctionPlayers();
     const id=auctionId();
     const teams={
       player:{name:req.body.teamName||'Your Team',purse:100,squad:[],strategy:'player'},
       agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},
       agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}
     };
-    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,lastAuctioneerCall:'',roundEndsAt:Date.now()+AUCTION_DURATION_MS,logs:[`Pool: ${players[0].pool} | Auction starts: ${players[0].name} at ₹${players[0].base} Cr`]};
+    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},pendingBids:[],auctionClosed:false,lastAuctioneerCall:'',roundEndsAt:Date.now()+AUCTION_DURATION_MS,logs:[`Pool: ${players[0].pool} | Auction starts: ${players[0].name} at ₹${players[0].base} Cr`],lastAgentDecisionAt:0};
     auctionSessions.set(id,s); res.json(publicAuction(s));
   } catch(e){res.status(500).json({ok:false,error:e.message||'Unable to start auction'});}
 });
+
 app.post('/api/auction/bid',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId);
   if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'});
-  if(s.auctionClosed || Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'This player auction has closed.'});
+  acceptPendingBids(s);
+  if(s.auctionClosed||Date.now()>=s.roundEndsAt)return res.status(400).json({ok:false,error:'This player auction has closed.'});
   const team=s.teams.player;
   if(team.squad.length>=AUCTION_MAX_SQUAD)return res.status(400).json({ok:false,error:`Your Team already has the maximum ${AUCTION_MAX_SQUAD} players.`});
-  const p=s.players[s.index], next=Math.round((s.highest.amount+0.5)*2)/2;
-  if(team.purse<next)return res.status(400).json({ok:false,error:'Insufficient purse'});
-  s.highest={bidder:'player',amount:next}; s.logs.push(`${team.name} bids ₹${next} Cr for ${p.name}`); runAgents(s);
+  if(s.pendingBids.some(b=>b.bidder==='player'))return res.status(409).json({ok:false,error:'Your previous bid is waiting for 2-second auctioneer acceptance.'});
+  const next=nextBidAmount(s);
+  if(team.purse<next || team.purse-remainingBuyReserve(team,1)<next)return res.status(400).json({ok:false,error:'That bid would leave too little purse to complete the minimum five-player squad.'});
+  const p=s.players[s.index];
+  queueBid(s,'player',next);
+  s.logs.push(`${team.name} bids ₹${next} Cr for ${p.name} (accepting in 2s)`);
+  runAgents(s);
   res.json(publicAuction(s));
 });
+
 app.post('/api/auction/tick',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
-  if(s.index<s.players.length && !s.auctionClosed){
-    const remaining=Math.ceil((s.roundEndsAt-Date.now())/1000);
-    if(remaining<=0)settleCurrentPlayer(s);
-    else {
-      runAgents(s);
-      if(remaining<=3 && s.lastAuctioneerCall!==String(remaining)){
+  if(s.index<s.players.length&&!s.auctionClosed){
+    acceptPendingBids(s);
+    const now=Date.now();
+    if(now<s.roundEndsAt){
+      // Agent decisions are throttled so they feel deliberate rather than spammy.
+      if(now-(s.lastAgentDecisionAt||0)>=700){s.lastAgentDecisionAt=now;runAgents(s);}
+      const remaining=Math.ceil((s.roundEndsAt-now)/1000);
+      if(remaining<=3&&s.lastAuctioneerCall!==String(remaining)){
         s.lastAuctioneerCall=String(remaining);
-        const msg=remaining===3?'Auctioneer: Three seconds remaining! Any more bids?':remaining===2?'Auctioneer: Going once... any final bid?':'Auctioneer: Last second! Going twice...';
-        s.logs.push(msg);
+        s.logs.push(remaining===3?'Auctioneer: Three seconds remaining!':remaining===2?'Auctioneer: Going once... final bids?':'Auctioneer: Last second!');
       }
+    } else {
+      // Give any bid submitted before the cutoff its full 2-second acceptance window.
+      if(s.pendingBids.length===0)settleCurrentPlayer(s);
+      else if(s.pendingBids.some(b=>b.acceptAt<=now))settleCurrentPlayer(s);
     }
   }
   res.json(publicAuction(s));
 });
+
 app.post('/api/auction/next',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
   if(!s.auctionClosed)return res.status(400).json({ok:false,error:'Current auction is still live'});
   s.index++;
   if(s.index<s.players.length){
     const n=s.players[s.index];
-    s.highest={bidder:null,amount:n.base}; s.auctionClosed=false; s.lastAuctioneerCall=''; s.roundEndsAt=Date.now()+AUCTION_DURATION_MS;
+    s.highest={bidder:null,amount:n.base}; s.pendingBids=[]; s.auctionClosed=false; s.lastAuctioneerCall=''; s.lastAgentDecisionAt=0; s.roundEndsAt=Date.now()+AUCTION_DURATION_MS;
     s.logs.push(`Auctioneer: Next player, ${n.name}, enters from the ${n.pool} pool at ₹${n.base} Cr.`);
   }
   res.json(publicAuction(s));
 });
+
 app.post('/api/auction/results',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId); if(!s)return res.status(404).json({ok:false,error:'Session not found'});
   if(s.index<s.players.length)return res.status(400).json({ok:false,error:'Finish all 20 player auctions first.'});
-  const ranked=Object.entries(s.teams).map(([id,t])=>{
-    const ev=evaluateTeam(t);
-    return {id,name:t.name,score:ev.valid?ev.score:0,disqualified:!ev.valid,spent:ev.spent,remaining:ev.remaining,squad:t.squad,analysis:ev};
-  }).sort((a,b)=>{
-    if(a.disqualified!==b.disqualified)return a.disqualified?1:-1;
-    return b.score-a.score;
-  });
+  const ranked=Object.entries(s.teams).map(([id,t])=>{const ev=evaluateTeam(t);return {id,name:t.name,score:ev.valid?ev.score:0,disqualified:!ev.valid,spent:ev.spent,remaining:ev.remaining,squad:t.squad,analysis:ev};}).sort((a,b)=>{if(a.disqualified!==b.disqualified)return a.disqualified?1:-1;return b.score-a.score;});
   const winner=ranked.find(x=>!x.disqualified)||ranked[0];
-  res.json({ok:true,ranked,winner,criteria:{rating:25,variety:20,roleAvailability:20,squadCompleteness:10,squadSizeEfficiency:5,spendingEfficiency:10,purseTactic:5,minimumBuys:5,requiredRoles:AUCTION_REQUIRED_ROLES}});
+  res.json({ok:true,ranked,winner,criteria:{rating:25,variety:20,roleAvailability:20,squadCompleteness:10,spendingTactic:15,strategyFit:10},timing:{auctionSeconds:15,bidAcceptanceDelaySeconds:2}});
 });
-
