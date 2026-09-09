@@ -324,8 +324,8 @@ app.post("/api/quiz/start", async (req, res) => {
     let parsed = { questions: [] };
 
     try {
-      const raw = await chatCompletion(messages, 0.5, 1100);
-      parsed = JSON.parse(raw);
+      const raw = await chatCompletion(messages, 0.45, 3500, { json: true, timeoutMs: 60000 });
+      parsed = parseModelJson(raw);
     } catch {
       // ignore and fallback below
     }
@@ -341,8 +341,8 @@ app.post("/api/quiz/start", async (req, res) => {
     // Regenerate instead of showing unrelated placeholder questions
     if (questions.length < 5) {
       try {
-        const retryRaw = await chatCompletion(PROMPTS.quiz(topic, bannedList.slice(-20)), 0.3, 1400);
-        const retryParsed = JSON.parse(retryRaw);
+        const retryRaw = await chatCompletion(PROMPTS.quiz(topic, bannedList.slice(-20)), 0.25, 4500, { json: true, timeoutMs: 60000 });
+        const retryParsed = parseModelJson(retryRaw);
         if (Array.isArray(retryParsed.questions)) questions = retryParsed.questions;
       } catch (err) {
         console.error("Quiz regeneration failed:", err.message);
