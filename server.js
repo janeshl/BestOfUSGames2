@@ -1106,7 +1106,11 @@ app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${POR
 // -----------------------------------------------------------------------------
 const AUCTION_POOL_ORDER = ["Batsmen", "Bowlers", "All Rounders", "Wicket Keepers"];
 const AUCTION_POOL_COUNTS = {"Batsmen":6,"Bowlers":6,"All Rounders":5,"Wicket Keepers":3};
+const AUCTION_PHASES = ["main", "unsold"];
 const AUCTION_CLOSE_WAIT_MS = 3000;
+const AUCTION_AI_MIN_DELAY_MS = 1400;
+const AUCTION_AI_MAX_DELAY_MS = 3200;
+const AUCTION_PLAYER_RESPONSE_MS = 2200;
 const AUCTION_MAX_SQUAD = 6;
 const AUCTION_MIN_SQUAD = 5;
 const AUCTION_REQUIRED_ROLES = ["Batsmen","Bowlers","Wicket Keepers"];
@@ -1146,8 +1150,10 @@ const auctionPlayerPoolsPrompt = () => [
 ];
 
 async function generateAuctionPlayers(){
+  // Add a per-game nonce so every new auction asks the model for a genuinely fresh pool.
+  const gameNonce = `${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
   try {
-    const raw = await chatCompletion(auctionPlayerPoolsPrompt(), 0.75, 2200, {json:true, timeoutMs:30000});
+    const raw = await chatCompletion([...auctionPlayerPoolsPrompt(), { role: "user", content: `Game nonce: ${gameNonce}. Do not reuse a predictable list; choose a fresh set of real cricketers for this game.` }], 0.85, 2200, {json:true, timeoutMs:30000});
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     const players = Array.isArray(parsed?.players) ? parsed.players : [];
     const counts = {...AUCTION_POOL_COUNTS};
@@ -1169,13 +1175,15 @@ async function generateAuctionPlayers(){
 function roundHalf(n){ return Math.round(Number(n)*2)/2; }
 function publicAuction(s){
   const p=s.players[s.index];
+  const done=!!s.done || (s.phase==='unsold' && s.index>=s.players.length);
   return {
     ok:true,sessionId:s.id,current:p||null,index:s.index,total:s.players.length,
     auctionClosed:!!s.auctionClosed,teams:s.teams,logs:s.logs.slice(-18),
-    currentBid:s.highest.amount,currentBidder:s.highest.bidder,
-    done:s.index>=s.players.length,poolName:p?.pool||null,poolCounts:AUCTION_POOL_COUNTS,
+    currentBid:s.highest?.amount||0,currentBidder:s.highest?.bidder||null,
+    done,poolName:s.phase==='unsold'?'Unsold Players':(p?.pool||null),phase:s.phase,
+    unsoldCount:s.unsoldPlayers?.length||0,poolCounts:AUCTION_POOL_COUNTS,
     waitingForClose:s.waitingForClose,closeAt:s.closeAt||null,
-    rules:{minSquad:AUCTION_MIN_SQUAD,maxSquad:AUCTION_MAX_SQUAD,requiredRoles:AUCTION_REQUIRED_ROLES,closeWaitSeconds:AUCTION_CLOSE_WAIT_MS/1000}
+    rules:{minSquad:AUCTION_MIN_SQUAD,maxSquad:AUCTION_MAX_SQUAD,requiredRoles:AUCTION_REQUIRED_ROLES,closeWaitSeconds:AUCTION_CLOSE_WAIT_MS/1000,unsoldReauction:true}
   };
 }
 function teamRoleCounts(team){
@@ -1236,17 +1244,39 @@ function aiShouldBid(team,s,p,currentAmount){
   const st=aiState(team,s,p);
   const next=roundHalf(currentAmount+0.5);
   if(!Number.isFinite(st.reserve) || next>st.safePurse || next>st.targetMax)return {bid:false,reason:'protecting purse'};
+
+  // Tactical bidding: never buy simply because a player is available.
+  // AI first asks whether this player improves the legal squad and final score.
   const overpay=next/Math.max(1,st.value);
-  if(overpay>1.15 && !st.mustBuy)return {bid:false,reason:'price too high'};
-  const qualityPressure=st.quality>0.75?0.12:st.quality>0.55?0.04:-0.06;
-  const rolePressure=st.missing.includes(p.pool)?0.34:0;
-  const scarcityPressure=st.futureCore[p.pool]===0?0.24:st.futureCore[p.pool]===1?0.14:0;
-  const budgetPressure=team.purse<25?-0.20:team.purse>65?0.06:0;
-  const strategy=team.strategy==='aggressive'?0.10:0.02;
-  const valuePressure=overpay<=0.9?0.10:overpay<=1?0.03:-0.10;
-  const score=0.34+qualityPressure+rolePressure+scarcityPressure+budgetPressure+strategy+valuePressure;
-  const bid=st.mustBuy || (st.canFill && Math.random()<Math.max(0.05,Math.min(0.82,score)));
-  return {bid,max:st.targetMax,state:st};
+  const quality=st.quality;
+  const roleNeed=st.missing.includes(p.pool);
+  const scarce=st.futureCore[p.pool] <= 1;
+  const cheap=overpay <= 0.88;
+  const fair=overpay <= 1.02;
+  const premiumPlayer=p.rating>=92;
+
+  // Hard stop: preserve enough purse for a legal 5-player squad.
+  if(!Number.isFinite(st.reserve) || team.purse-next<st.reserve)
+    return {bid:false,reason:'keeping a reserve for a legal squad'};
+  if(!roleNeed && !premiumPlayer && !cheap)
+    return {bid:false,reason:'does not improve the current squad plan'};
+  if(overpay>1.16 && !(roleNeed && scarce && p.rating>=88))
+    return {bid:false,reason:'price has crossed value'};
+
+  // Different personalities, but both remain disciplined.
+  const aggression=team.strategy==='aggressive' ? 0.18 : 0.06;
+  const urgency=roleNeed ? (scarce?0.42:0.24) : 0;
+  const qualityBoost=quality*0.20 + (premiumPlayer?0.10:0);
+  const valueBoost=cheap?0.18:(fair?0.08:-0.08);
+  const budgetPenalty=team.purse<30?0.22:(team.purse<45?0.10:0);
+  const mustBuy=team.squad.length<AUCTION_MIN_SQUAD && roleNeed && scarce;
+  const score=Math.max(0.05, Math.min(0.88, 0.12+aggression+urgency+qualityBoost+valueBoost-budgetPenalty));
+  const bid=mustBuy || Math.random()<score;
+  return {bid,max:st.targetMax,state:st,reason:bid?'':'waiting for better value'};
+}
+function scheduleNextAgentDecision(s, minMs=AUCTION_AI_MIN_DELAY_MS){
+  const jitter=Math.floor(Math.random()*(AUCTION_AI_MAX_DELAY_MS-minMs+1));
+  s.nextAgentDecisionAt=Date.now()+minMs+jitter;
 }
 function placeBid(s,bidder,amount){
   const t=s.teams[bidder],p=s.players[s.index];
@@ -1258,30 +1288,40 @@ function placeBid(s,bidder,amount){
   s.waitingForClose=true;
   s.closeAt=Date.now()+AUCTION_CLOSE_WAIT_MS;
   s.lastBidAt=Date.now();
+  // Every accepted bid creates a human-readable pause before another AI action.
+  scheduleNextAgentDecision(s, bidder==='player'?AUCTION_PLAYER_RESPONSE_MS:AUCTION_AI_MIN_DELAY_MS);
   s.logs.push(`${t.name} bids ₹${amount} Cr for ${p.name}`);
   return true;
 }
 function runAgents(s){
   const p=s.players[s.index]; if(!p||s.auctionClosed)return;
   const now=Date.now();
-  if(now-(s.lastAgentDecisionAt||0)<700)return;
+  if(now<(s.nextAgentDecisionAt||0))return;
+  if(now-(s.lastAgentDecisionAt||0)<AUCTION_AI_MIN_DELAY_MS)return;
   s.lastAgentDecisionAt=now;
-  for(const key of ['agent1','agent2']){
+
+  // One AI acts at a time. This prevents instant AI-vs-AI bid chains and leaves
+  // the player a genuine chance to respond after every accepted bid.
+  const order=Math.random()<0.5?['agent1','agent2']:['agent2','agent1'];
+  for(const key of order){
     const t=s.teams[key];
-    const current=s.highest.amount;
-    const decision=aiShouldBid(t,s,p,current);
+    const decision=aiShouldBid(t,s,p,s.highest.amount);
     if(decision.bid){
-      const next=roundHalf(current+0.5);
-      if(next<=decision.max && placeBid(s,key,next)) continue;
+      const next=roundHalf(s.highest.amount+0.5);
+      if(next<=decision.max && placeBid(s,key,next)){
+        s.logs.push(`${t.name}: BID — tactical move for ${p.name}.`);
+        return;
+      }
     }
     if(!s.agentInterestLogged?.[key]){
       s.agentInterestLogged=s.agentInterestLogged||{};
       s.agentInterestLogged[key]=true;
-      const reason=decision.reason|| (decision.state?.missing.includes(p.pool)?'saving for a better opportunity':'does not fit the current plan');
-      s.logs.push(`${t.name}: NO INTEREST — ${reason}.`);
+      s.logs.push(`${t.name}: NO INTEREST — ${decision.reason||'waiting for a better opportunity'}.`);
     }
   }
+  scheduleNextAgentDecision(s, 1800);
 }
+
 function settleCurrentPlayer(s){
   if(s.auctionClosed)return;
   const p=s.players[s.index]; if(!p)return;
@@ -1292,7 +1332,12 @@ function settleCurrentPlayer(s){
       t.squad.push({...p,price:s.highest.amount});
       s.logs.push(`SOLD! ${p.name} → ${t.name} for ₹${s.highest.amount} Cr`);
     }
-  } else s.logs.push(`UNSOLD: ${p.name} — no team was interested.`);
+  } else {
+    s.unsoldPlayers=s.unsoldPlayers||[];
+    // Keep the original player id/details so the same player can return in the Unsold Players pool.
+    s.unsoldPlayers.push({...p});
+    s.logs.push(`UNSOLD: ${p.name} — no team was interested. Added to the Unsold Players re-auction pool.`);
+  }
   s.auctionClosed=true;
   s.waitingForClose=false;
   s.closeAt=null;
@@ -1332,7 +1377,7 @@ app.post('/api/auction/start', async (req,res)=>{
       agent1:{name:'AI Titans',purse:100,squad:[],strategy:'balanced'},
       agent2:{name:'AI Warriors',purse:100,squad:[],strategy:'aggressive'}
     };
-    const s={id,players,index:0,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,waitingForClose:false,closeAt:null,lastBidAt:0,lastAgentDecisionAt:0,agentInterestLogged:{},logs:[`Pool: ${players[0].pool} | Auctioneer opens ${players[0].name} at ₹${players[0].base} Cr. No countdown — bid, skip or wait for the AI agents.`]};
+    const s={id,players,index:0,phase:'main',unsoldPlayers:[],done:false,teams,highest:{bidder:null,amount:players[0].base},auctionClosed:false,waitingForClose:false,closeAt:null,lastBidAt:0,lastAgentDecisionAt:0,nextAgentDecisionAt:Date.now()+1800,agentInterestLogged:{},logs:[`Pool: ${players[0].pool} | Auctioneer opens ${players[0].name} at ₹${players[0].base} Cr. No countdown — bid, skip or wait for the AI agents.`]};
     auctionSessions.set(id,s);res.json(publicAuction(s));
   }catch(e){res.status(500).json({ok:false,error:e.message||'Unable to start auction'});}
 });
@@ -1341,8 +1386,8 @@ app.post('/api/auction/bid',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId);
   if(!s||s.index>=s.players.length)return res.status(400).json({ok:false,error:'Auction session not found or complete'});
   if(s.auctionClosed)return res.status(400).json({ok:false,error:'This player has already been sold or passed.'});
-  runAgents(s);
   const next=roundHalf(s.highest.amount+0.5),team=s.teams.player,p=s.players[s.index];
+  if(team.squad.length>=AUCTION_MAX_SQUAD)return res.status(400).json({ok:false,error:`Your Team squad is complete at ${AUCTION_MAX_SQUAD} players. Bidding is disabled for your team.`});
   if(team.squad.length>=AUCTION_MAX_SQUAD)return res.status(400).json({ok:false,error:`Your Team already has the maximum ${AUCTION_MAX_SQUAD} players.`});
   if(team.purse<next)return res.status(400).json({ok:false,error:'Not enough purse for this bid.'});
   if(!Number.isFinite(reserveForFive(team,s,p))||team.purse-next<reserveForFive(team,s,p))return res.status(400).json({ok:false,error:'Keep enough purse to complete the minimum five-player squad and required roles.'});
@@ -1359,8 +1404,8 @@ app.post('/api/auction/skip',(req,res)=>{
   s.waitingForClose=true;
   s.closeAt=Date.now()+AUCTION_CLOSE_WAIT_MS;
   const p=s.players[s.index];
-  s.logs.push(`Your Team: NO INTEREST in ${p.name}. Auctioneer is waiting 3 seconds for AI bids.`);
-  runAgents(s);
+  s.nextAgentDecisionAt=Date.now()+1200;
+  s.logs.push(`Your Team: NO INTEREST in ${p.name}. Auctioneer invites the AI teams to bid.`);
   res.json(publicAuction(s));
 });
 
@@ -1378,17 +1423,38 @@ app.post('/api/auction/next',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId);if(!s)return res.status(404).json({ok:false,error:'Session not found'});
   if(!s.auctionClosed)return res.status(400).json({ok:false,error:'Current auction is still open. Wait for the auctioneer to close it.'});
   s.index++;
-  if(s.index<s.players.length){
+
+  // After all 20 original players, reopen every unsold player in a dedicated final pool.
+  if(s.phase==='main' && s.index>=s.players.length){
+    s.phase='unsold';
+    s.players=(s.unsoldPlayers||[]).map(x=>({...x}));
+    s.index=0;
+    s.unsoldPlayers=[];
+    s.auctionClosed=false;s.waitingForClose=false;s.closeAt=null;s.lastBidAt=0;s.lastAgentDecisionAt=0;s.nextAgentDecisionAt=Date.now()+1800;s.agentInterestLogged={};s.playerSkipped=false;
+    if(s.players.length){
+      const n=s.players[0];
+      s.highest={bidder:null,amount:n.base};
+      s.logs.push(`🔁 UNSOLD PLAYERS POOL: ${s.players.length} players get a second chance. Auctioneer reopens ${n.name} at ₹${n.base} Cr.`);
+    } else {
+      s.done=true;
+      s.highest={bidder:null,amount:0};
+      s.logs.push('🔁 UNSOLD PLAYERS POOL: Empty — all original players were sold. Auction complete.');
+    }
+  } else if(s.index<s.players.length){
     const n=s.players[s.index];
-    s.highest={bidder:null,amount:n.base};s.auctionClosed=false;s.waitingForClose=false;s.closeAt=null;s.lastBidAt=0;s.lastAgentDecisionAt=0;s.agentInterestLogged={};s.playerSkipped=false;
-    s.logs.push(`Auctioneer: Next player — ${n.name}, ${n.pool}, base ₹${n.base} Cr.`);
+    s.highest={bidder:null,amount:n.base};s.auctionClosed=false;s.waitingForClose=false;s.closeAt=null;s.lastBidAt=0;s.lastAgentDecisionAt=0;s.nextAgentDecisionAt=Date.now()+1800;s.agentInterestLogged={};s.playerSkipped=false;
+    s.logs.push(`Auctioneer: Next ${s.phase==='unsold'?'unsold-pool player':'player'} — ${n.name}, ${n.pool}, base ₹${n.base} Cr.`);
+  } else if(s.phase==='unsold'){
+    s.done=true;
+    s.highest={bidder:null,amount:0};
+    s.logs.push('Auctioneer: Unsold Players pool complete. Auction finished.');
   }
   res.json(publicAuction(s));
 });
 
 app.post('/api/auction/results',(req,res)=>{
   const s=auctionSessions.get(req.body.sessionId);if(!s)return res.status(404).json({ok:false,error:'Session not found'});
-  if(s.index<s.players.length)return res.status(400).json({ok:false,error:'Finish all 20 player auctions first.'});
+  if(!s.done)return res.status(400).json({ok:false,error:'Finish the main auction and the Unsold Players re-auction pool first.'});
   const ranked=Object.entries(s.teams).map(([id,t])=>{const ev=evaluateTeam(t);return {id,name:t.name,score:ev.valid?ev.score:0,disqualified:!ev.valid,spent:ev.spent,remaining:ev.remaining,squad:t.squad,analysis:ev};}).sort((a,b)=>{if(a.disqualified!==b.disqualified)return a.disqualified?1:-1;return b.score-a.score;});
   const winner=ranked.find(x=>!x.disqualified)||ranked[0];
   res.json({ok:true,ranked,winner,criteria:{rating:25,variety:20,roleAvailability:20,squadCompleteness:10,spendingTactic:15,strategyFit:10},timing:{auctionSeconds:null,bidAcceptanceDelaySeconds:0,auctioneerCloseWaitSeconds:3}});
