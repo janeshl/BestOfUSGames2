@@ -86,7 +86,7 @@ Analyze deeply and choose your next action.` }
 
   // Game 4: 5-Round Mystery Solver — player vs two independent AI detectives
   mysterySet: () => [
-    { role: "system", content: `Create EXACTLY 5 fair, solvable mystery cases for a timed game. Each mystery must be self-contained, family-friendly, and solvable from the clues given. Vary the setting and reasoning type (logic, observation, deduction, timeline, lateral thinking). Do not require obscure real-world knowledge. Each case should have one clear canonical answer. Provide 3-5 clues that together are sufficient to solve it, but do not state the answer in the clues. Return STRICT JSON ONLY: {"mysteries":[{"title":"string","mystery":"string","clues":["string","string","string"],"answer":"string","acceptedAnswers":["string","string"]}]}. Exactly 5 mysteries. No markdown or extra text.` },
+    { role: "system", content: `Create EXACTLY 5 fair, solvable mystery cases for a timed game. Each mystery must be self-contained, family-friendly, and solvable from the clues given. Use a DIFFERENT mystery type in every round, in this exact variety: Round 1 logic/deduction, Round 2 observation/detail, Round 3 timeline/alibi, Round 4 lateral thinking, Round 5 pattern/sequence. Do not repeat a type. Do not require obscure real-world knowledge. Each case should have one clear canonical answer. Provide EXACTLY 2 clues that together are sufficient to solve it, but do not state the answer in the clues. Return STRICT JSON ONLY: {"mysteries":[{"title":"string","mystery":"string","clues":["string","string"],"answer":"string","acceptedAnswers":["string","string"]}]}. Exactly 5 mysteries. No markdown or extra text.` },
     { role: "user", content: "Generate five distinct mysteries now. JSON only." }
   ],
 
@@ -664,7 +664,7 @@ app.post("/api/mystery/start", async (_req, res) => {
     const parsed = parseModelJson(raw);
     const mysteries = Array.isArray(parsed.mysteries) ? parsed.mysteries : [];
     const valid = mysteries.filter(m =>
-      m?.title && m?.mystery && Array.isArray(m.clues) && m.clues.length >= 3 &&
+      m?.title && m?.mystery && Array.isArray(m.clues) && m.clues.length === 2 &&
       m.answer && Array.isArray(m.acceptedAnswers)
     ).slice(0, 5);
     if (valid.length !== 5) throw new Error("Unable to generate five valid mysteries. Please try again.");
